@@ -161,7 +161,8 @@ $('#decompose-form').addEventListener('submit', async (event) => {
     const upload = $('#crop-mode').value === 'center-square' ? await centerSquareBlob(state.file) : state.file
     const body = new FormData()
     body.append('file', upload, $('#crop-mode').value === 'center-square' ? 'cropped-input.png' : state.file.name)
-    body.append('seed', $('#seed').value)
+    const seed = $('#seed').value.trim()
+    if (seed) body.append('seed', seed)
     body.append('resolution', $('#resolution').value)
     body.append('depth_resolution', $('#depth-resolution').value)
     body.append('inference_steps', $('#steps').value)
@@ -223,6 +224,7 @@ async function pollJob() {
 }
 
 function renderResults(job) {
+  $('#cancel-job').hidden = true
   const results = $('#results')
   const gallery = $('#asset-gallery')
   gallery.replaceChildren()
@@ -279,6 +281,11 @@ async function renderPuppetPreview(job) {
   const metadata = await response.json()
   const parts = Object.entries(metadata.parts || {})
   if (!parts.length) return
+  const eyeStack = ['eyewhite', 'irides', 'eyelash', 'eyebrow', 'eyewear']
+  const eyeDepths = eyeStack
+    .map((name) => metadata.parts[name]?.depth_median)
+    .filter((depth) => Number.isFinite(depth))
+  const eyeAnchor = eyeDepths.length ? Math.min(...eyeDepths) : null
 
   const rig = $('#puppet-rig')
   const viewport = $('#puppet-viewport')
@@ -293,9 +300,13 @@ async function renderPuppetPreview(job) {
     image.src = asset.url
     image.alt = ''
     image.title = name
-    const depth = Number.isFinite(part.depth_median) ? part.depth_median : 0.5
+    const rawDepth = Number.isFinite(part.depth_median) ? part.depth_median : 0.5
+    const eyeIndex = eyeStack.indexOf(name)
+    const depth = eyeIndex >= 0 && eyeAnchor !== null
+      ? eyeAnchor + (eyeStack.length - 1 - eyeIndex) * 0.002
+      : rawDepth
     const bounds = part.xyxy || [0, 0, frameWidth, frameHeight]
-    image.style.zIndex = String(Math.round((1 - depth) * 1000))
+    image.style.zIndex = String(Math.round((1 - depth) * 10000))
     image.style.transformOrigin = `${((bounds[0] + bounds[2]) / 2 / frameWidth) * 100}% ${((bounds[1] + bounds[3]) / 2 / frameHeight) * 100}%`
     rig.append(image)
     previewState.layers.push({ element: image, depth, name })
@@ -389,6 +400,7 @@ async function restoreJobFromUrl() {
     $('#job-log').textContent = job.logs.join('\n')
     if (job.status === 'completed') {
       $('#job-progress').hidden = false
+      $('#cancel-job').hidden = true
       setProgressState('completed')
       setStatus('Restored completed generation.', 'success')
       renderResults(job)
@@ -399,6 +411,7 @@ async function restoreJobFromUrl() {
       setStatus('Restored generation in progress.')
       pollJob()
     } else {
+      $('#cancel-job').hidden = true
       setProgressState(job.status)
       setStatus(job.error || `Saved job is ${job.status}.`, 'error')
     }

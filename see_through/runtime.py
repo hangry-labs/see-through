@@ -64,6 +64,7 @@ class Job:
 
 _jobs: dict[str, Job] = {}
 _state_lock = threading.Lock()
+_persistence_lock = threading.Lock()
 _active_job_id: str | None = None
 _processes: dict[str, subprocess.Popen[str]] = {}
 
@@ -227,10 +228,11 @@ def persist_job(job: Job) -> None:
     root.mkdir(parents=True, exist_ok=True)
     destination = root / "job.json"
     temporary = root / "job.json.tmp"
-    payload = job.public(include_logs=False)
-    payload.pop("logs", None)
-    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    temporary.replace(destination)
+    with _persistence_lock:
+        payload = job.public(include_logs=False)
+        payload.pop("logs", None)
+        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temporary.replace(destination)
 
 
 def _set_stage(job: Job, line: str) -> None:

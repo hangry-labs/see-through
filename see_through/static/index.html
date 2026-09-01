@@ -89,8 +89,8 @@
           </label>
 
           <div class="field split-fields">
-            <label><span>Seed</span><input id="seed" name="seed" type="number" min="0" max="2147483647" value="42"></label>
-            <label><span>Steps</span><input id="steps" name="inference_steps" type="number" min="1" max="100" value="30"></label>
+            <label><span>Seed</span><input id="seed" name="seed" type="number" min="0" max="2147483647" placeholder="Random"><small>Empty chooses a new seed.</small></label>
+            <label><span>Steps</span><input id="steps" name="inference_steps" type="number" min="1" max="100" value="30"><small>30 is recommended.</small></label>
           </div>
 
           <label class="check-field">
@@ -125,7 +125,7 @@
           <section id="job-progress" class="job-progress" hidden>
             <div class="progress-heading">
               <div><p class="eyebrow">PROCESSING</p><h2 id="job-stage">Starting</h2></div>
-              <div class="job-actions"><span id="job-id" class="job-id"></span><button id="cancel-job" class="stop-button" type="button"><i class="icon-square"></i> Stop generation</button></div>
+              <div class="job-actions"><span id="job-id" class="job-id"></span><button id="cancel-job" class="stop-button" type="button" hidden><i class="icon-square"></i> Stop generation</button></div>
             </div>
             <div class="progress-track"><span></span></div>
             <pre id="job-log" class="job-log"></pre>

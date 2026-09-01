@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import mimetypes
 import os
+import secrets
 from io import BytesIO
 from pathlib import Path
 
@@ -81,7 +82,7 @@ def runtime_info() -> dict[str, object]:
 async def create_decomposition(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    seed: int = Form(42, ge=0, le=2_147_483_647),
+    seed: int | None = Form(None, ge=0, le=2_147_483_647),
     resolution: int = Form(1280),
     depth_resolution: int = Form(768),
     inference_steps: int = Form(30, ge=1, le=100),
@@ -105,7 +106,7 @@ async def create_decomposition(
         raise HTTPException(422, "image dimensions must be between 64 and 8192 pixels")
 
     settings = {
-        "seed": seed,
+        "seed": seed if seed is not None else secrets.randbelow(2_147_483_648),
         "resolution": resolution,
         "depth_resolution": depth_resolution,
         "inference_steps": inference_steps,
