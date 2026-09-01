@@ -24,7 +24,7 @@ if __name__ == '__main__':
     parser.add_argument('--srcp', type=str, default='assets/test_image.png', help='input image')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--repo_id_layerdiff', default='layerdifforg/seethroughv0.0.2_layerdiff3d')
-    parser.add_argument('--repo_id_depth', default='24yearsold/seethroughv0.0.1_marigold')
+    parser.add_argument('--repo_id_depth', default='layerdifforg/seethroughv0.0.1_marigold')
     parser.add_argument('--vae_ckpt', default=None)
     parser.add_argument('--unet_ckpt', default=None)
     parser.add_argument('--resolution', type=int, default=1280, help="inference resolution of layerdiff")

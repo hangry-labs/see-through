@@ -655,6 +655,9 @@ def load_parts(srcp, rotate=False, pad=0, min_width=64):
         fullpage = np.rot90(fullpage, 3, )
 
     for tag, partdict in infos['parts'].items():
+        part_path = osp.join(srcp, tag + '.png')
+        if not osp.isfile(part_path):
+            continue
 
         # img = Image.open(osp.join(srcp, tag + '.png')).convert('RGBA')
         # depthp = osp.join(srcp, tag + '_depth.png')
@@ -707,12 +710,12 @@ def load_parts(srcp, rotate=False, pad=0, min_width=64):
             
         #     dmin, dmax = partdict['depth_min'], partdict['depth_max']
         #     depth = np.array(depth, dtype=np.float32) / 255 * (dmax - dmin) + dmin
-            p = load_part(osp.join(srcp, tag + '.png'), rotate=rotate, pad=pad, min_width=min_width, min_sz=min_sz)
-            if p is not None:
-                tag2pd[tag] = p
-                tag2pd[tag]['part_id'] = part_id
-                part_dict_list.append(tag2pd[tag])
-                part_id += 1
+        p = load_part(part_path, rotate=rotate, pad=pad, min_width=min_width, min_sz=min_sz)
+        if p is not None:
+            tag2pd[tag] = p
+            tag2pd[tag]['part_id'] = part_id
+            part_dict_list.append(tag2pd[tag])
+            part_id += 1
             
 
     return fullpage, infos, part_dict_list

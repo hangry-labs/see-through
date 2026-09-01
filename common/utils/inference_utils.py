@@ -6,7 +6,7 @@ from modules.layerdiffuse.diffusers_kdiffusion_sdxl import KDiffusionStableDiffu
 from modules.layerdiffuse.vae import TransparentVAE
 from modules.layerdiffuse.layerdiff3d import UNetFrameConditionModel
 from modules.marigold import MarigoldDepthPipeline
-from utils.cv import center_square_pad_resize, img_alpha_blending, smart_resize, validate_resolution
+from utils.cv import center_square_pad_resize, crop_head_region, img_alpha_blending, smart_resize, validate_resolution
 from utils.torch_utils import seed_everything
 from utils.io_utils import json2dict, dict2json, load_parts, save_tmp_img, load_part, save_psd
 from utils.torchcv import cluster_inpaint_part
@@ -103,24 +103,6 @@ def apply_layerdiff(
 
     elif tag_version == 'v3':
 
-        def _crop_head(img, xywh):
-            x, y, w, h = xywh
-            ih, iw = img.shape[:2]
-            x1 = x
-            y1 = y
-            x2 = x + w
-            y2 = y + h
-            if w < iw // 2:
-                px = min(iw - x - w, x, w // 5)
-                x1 = min(max(x - px, 0), iw)
-                x2 = min(max(x + w + px, 0), iw)
-            if h < ih // 2:
-                py = min(ih - y - h, y, h // 5)
-                y2 = min(max(y + h + py, 0), ih)
-                y1 = min(max(y - py, 0), ih)
-
-            return img[y1: y2, x1: x2], (x1, y1, x2, y2)
-
         body_tag_list = ['front hair', 'back hair', 'head', 'neck', 'neckwear', 'topwear', 'handwear', 'bottomwear', 'legwear', 'footwear', 'tail', 'wings', 'objects']
         pipeline_output = pipeline(
             strength=1.0,
@@ -141,13 +123,21 @@ def apply_layerdiff(
         # head_img = np.array(Image.open(osp.join(saved, 'head.png')))
 
         head_tag_list = ['headwear', 'face', 'irides', 'eyebrow', 'eyewhite', 'eyelash', 'eyewear', 'ears', 'earwear', 'nose', 'mouth']
-        hx0, hy0, hw, hh = cv2.boundingRect(cv2.findNonZero((head_img[..., -1] > 15).astype(np.uint8)))
+        head_points = cv2.findNonZero((head_img[..., -1] > 15).astype(np.uint8))
+        if head_points is None:
+            print('No head region detected; skipping head-detail decomposition.')
+            return
+        hx0, hy0, hw, hh = cv2.boundingRect(head_points)
         
         hx = int(hx0 * scale) - pad_pos[0]
         hy = int(hy0 * scale) - pad_pos[1]
         hw = int(hw * scale)
         hh = int(hh * scale)
-        input_head, (hx1, hy1, hx2, hy2) = _crop_head(input_img, [hx, hy, hw, hh])
+        head_crop = crop_head_region(input_img, [hx, hy, hw, hh])
+        if head_crop is None:
+            print('Detected head region falls outside the input; skipping head-detail decomposition.')
+            return
+        input_head, (hx1, hy1, hx2, hy2) = head_crop
         hx1 = int(hx1 / scale + pad_pos[0] / scale)
         hy1 = int(hy1 / scale + pad_pos[1] / scale)
         ih, iw = input_head.shape[:2]
@@ -285,13 +275,15 @@ def apply_marigold(srcp, pretrained: str, num_inference_steps=-1, seed=0, save_d
 
     parts = info['parts']
     for ii, depth in enumerate(depth_pred[:-1]):
+        tag = VALID_BODY_PARTS_V2[ii]
+        if not exist_list[ii] and tag not in compose_dict:
+            continue
         if normalize_depth:
             depth_max, depth_min = depth.max(), depth.min()
             depth = np.clip((depth - depth_min) / (depth_max - depth_min + 1e-7) * 255, 0, 255).astype(np.uint8)
         else:
             depth = (np.clip(depth, 0, 1) * 255).astype(np.uint8)
         # depth = depth[..., None][..., [-1] * 3].copy()
-        tag = VALID_BODY_PARTS_V2[ii]
         if tag in compose_dict:
             mask = blended_alpha > 256
             for t, im in zip(compose_dict[tag]['taglist'][::-1], compose_dict[tag]['imlist'][::-1]):

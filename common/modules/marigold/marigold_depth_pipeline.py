@@ -28,6 +28,7 @@
 # If you find Marigold useful, we kindly ask you to cite our papers.
 # --------------------------------------------------------------------------
 import os.path as osp
+import os
 import gc
 import logging
 import numpy as np
@@ -131,8 +132,9 @@ def encode_empty_text():
         empty_text_embed = load_file(cached_empty_text_tensor)['tensors']
         return empty_text_embed
     
-    text_encoder = CLIPTextModel.from_pretrained("prs-eth/marigold-depth-v1-1", subfolder="text_encoder")
-    tokenizer = CLIPTokenizer.from_pretrained("prs-eth/marigold-depth-v1-1", subfolder="tokenizer")
+    marigold_base_model = os.getenv("SEE_THROUGH_MARIGOLD_BASE_MODEL", "prs-eth/marigold-depth-v1-1")
+    text_encoder = CLIPTextModel.from_pretrained(marigold_base_model, subfolder="text_encoder")
+    tokenizer = CLIPTokenizer.from_pretrained(marigold_base_model, subfolder="tokenizer")
 
     prompt = ""
     text_inputs = tokenizer(

@@ -53,7 +53,7 @@ def pad_rgb_torch(argb_tensor, return_format='rgb', input_format='argb'):
     return fg
 
 
-def cluster_inpaint_part(depth, mask, img, inpaint='lama',**kwargs):
+def cluster_inpaint_part(depth, mask, img, **kwargs):
     from sklearn.cluster import DBSCAN, HDBSCAN, MeanShift, KMeans
     import random
 
@@ -81,12 +81,7 @@ def cluster_inpaint_part(depth, mask, img, inpaint='lama',**kwargs):
     i2c = np.argsort(cluster.cluster_centers_.flatten())
     extracted_parts = []
 
-    if inpaint == 'lama':
-        from annotators.lama_inpainter import apply_inpaint
-        from utils.io_utils import save_tmp_img
-        inpaint_method = apply_inpaint
-    else:
-        inpaint_method = lambda img, mask, *args, **kwargs: cv2.inpaint(img, mask, 3, cv2.INPAINT_NS)
+    inpaint_method = lambda img, mask: cv2.inpaint(img, mask, 3, cv2.INPAINT_NS)
 
     for ii in range(len(cluster.cluster_centers_) - 1):
         to_mask = labels == i2c[ii]
@@ -107,30 +102,8 @@ def cluster_inpaint_part(depth, mask, img, inpaint='lama',**kwargs):
         })
 
         valid_mask = np.clip((alpha.astype(np.int32) - imask.astype(np.int32)), 0, 255) > 50
-        if inpaint == 'lama':
-            a = alpha[..., None] / 255.
-
-            rgb_values = np.mean(rgb[valid_mask])
-            if rgb_values < 100:
-                fill = np.array([255] * 3)
-            else:
-                fill = np.array([0] * 3)
-            rgb = np.round(rgb * a + (1-a) * fill).astype(np.uint8)
-
         rgb = inpaint_method(rgb, imask_inpaint)
-
-        if inpaint == 'lama':
-            dist_map = np.mean(np.abs(rgb.astype(np.float32) - fill[None, None]), axis=2)
-            # save_tmp_img(np.clip((alpha.astype(np.int32) - imask.astype(np.int32)), 0, 255).astype(np.uint8))
-            
-            m = dist_map > 15
-            dist_map[m] = 255
-            dist_map[np.bitwise_not(m)] = dist_map[np.bitwise_not(m)]
-
-            dist_map[imask_inpaint <= 127] = alpha[imask_inpaint <=127]
-            alpha = np.round(dist_map).astype(np.uint8)
-        else:
-            alpha = inpaint_method(alpha, imask)
+        alpha = inpaint_method(alpha, imask)
         # d = inpaint_method(d, imask)
         d[imask > 127] = np.median(d[valid_mask])
 

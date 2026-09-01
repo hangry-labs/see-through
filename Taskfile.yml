@@ -1,0 +1,146 @@
+version: '3'
+
+vars:
+  IMAGE: see-through:test
+  TINY_IMAGE: see-through:tiny
+  CONTAINER: see_through
+  PORT: '8000'
+  GPU_DEVICE: '0'
+  HF_CACHE_VOLUME: see_through_hf_cache
+  WORKSPACE: '{{.TASKFILE_DIR}}\workspace'
+  TEST_IMAGE: '{{.TASKFILE_DIR}}\test_assets\roxy.png'
+  TEST_RESOLUTION: '768'
+  TEST_DEPTH_RESOLUTION: '512'
+  TEST_INFERENCE_STEPS: '30'
+  TEST_GROUP_OFFLOAD: 'false'
+  OFFLINE_TEST_INFERENCE_STEPS: '1'
+
+tasks:
+  list:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  doctor:
+    desc: Show local Docker, GPU, Task, and Git status
+    cmds:
+      - cmd /c docker version
+      - cmd /c docker compose version
+      - cmd /c nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv,noheader
+      - cmd /c task --version
+      - cmd /c git status --short
+
+  prepare:
+    internal: true
+    cmds:
+      - powershell -NoProfile -Command "New-Item -ItemType Directory -Force -Path '{{.WORKSPACE}}' | Out-Null"
+
+  deps:
+    desc: Regenerate the Linux/Python 3.12 dependency lock
+    cmds:
+      - uv pip compile requirements.in --python-version 3.12 --python-platform x86_64-manylinux_2_36 --index-strategy unsafe-best-match --upgrade --no-header --no-annotate --output-file requirements.txt
+
+  image-tiny:
+    desc: Build the runtime image without baked model assets
+    cmds:
+      - cmd /c docker build --target tiny -t {{.TINY_IMAGE}} .
+
+  image:
+    desc: Build the offline image with pinned model assets baked in
+    cmds:
+      - cmd /c docker build --target baked -t {{.IMAGE}} .
+
+  imagerun-tiny:
+    desc: Run the tiny image with online model caching and NVIDIA GPU access
+    cmds:
+      - task: prepare
+      - cmd: cmd /c docker rm -f {{.CONTAINER}} >nul 2>&1
+        ignore_error: true
+      - cmd /c docker run -d --name {{.CONTAINER}} --restart unless-stopped -p {{.PORT}}:8000 --gpus all -e CUDA_VISIBLE_DEVICES={{.GPU_DEVICE}} -e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0 -v {{.HF_CACHE_VOLUME}}:/app/.cache/huggingface -v "{{.WORKSPACE}}:/app/workspace" {{.TINY_IMAGE}}
+      - cmd /c docker ps --filter "name={{.CONTAINER}}"
+
+  imagerun:
+    desc: Run the fully baked offline image with NVIDIA GPU access
+    cmds:
+      - task: prepare
+      - cmd: cmd /c docker rm -f {{.CONTAINER}} >nul 2>&1
+        ignore_error: true
+      - cmd /c docker run -d --name {{.CONTAINER}} --restart unless-stopped -p {{.PORT}}:8000 --gpus all -e CUDA_VISIBLE_DEVICES={{.GPU_DEVICE}} -v "{{.WORKSPACE}}:/app/workspace" {{.IMAGE}}
+      - cmd /c docker ps --filter "name={{.CONTAINER}}"
+
+  verify-offline:
+    desc: Run a real decomposition from the baked image with all container networking disabled
+    cmds:
+      - task: prepare
+      - cmd: >-
+          cmd /c docker run --rm --network none --gpus all
+          -e CUDA_VISIBLE_DEVICES={{.GPU_DEVICE}}
+          -v "{{.TEST_IMAGE}}:/app/test-input.png:ro"
+          -v "{{.WORKSPACE}}:/app/workspace"
+          {{.IMAGE}}
+          python -u inference/scripts/inference_psd.py
+          --srcp /app/test-input.png
+          --save_dir /app/workspace/offline-validation
+          --save_to_psd
+          --resolution {{.TEST_RESOLUTION}}
+          --resolution_depth {{.TEST_DEPTH_RESOLUTION}}
+          --inference_steps {{.OFFLINE_TEST_INFERENCE_STEPS}}
+          --disable_progressbar
+          --group_offload
+          --repo_id_layerdiff /app/models/layerdiff
+          --repo_id_depth /app/models/marigold
+      - powershell -NoProfile -Command "if (-not (Test-Path -LiteralPath '{{.WORKSPACE}}\offline-validation\test-input.psd')) { throw 'Offline PSD output is missing' }; Get-Item -LiteralPath '{{.WORKSPACE}}\offline-validation\test-input.psd' | Select-Object FullName,Length,LastWriteTime"
+
+  localrun-tiny:
+    desc: Run tiny image dependencies with local runtime and inference source mounted
+    cmds:
+      - task: prepare
+      - cmd: cmd /c docker rm -f {{.CONTAINER}} >nul 2>&1
+        ignore_error: true
+      - cmd /c docker run -d --name {{.CONTAINER}} --restart unless-stopped -p {{.PORT}}:8000 --gpus all -e CUDA_VISIBLE_DEVICES={{.GPU_DEVICE}} -e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0 -v {{.HF_CACHE_VOLUME}}:/app/.cache/huggingface -v "{{.WORKSPACE}}:/app/workspace" -v "{{.TASKFILE_DIR}}\see_through:/app/see_through" -v "{{.TASKFILE_DIR}}\common:/app/common" -v "{{.TASKFILE_DIR}}\inference:/app/inference" {{.TINY_IMAGE}}
+      - cmd /c docker ps --filter "name={{.CONTAINER}}"
+
+  compose-up:
+    desc: Build and start the default tiny development deployment with Compose
+    cmds:
+      - task: prepare
+      - cmd /c docker compose up -d --build
+
+  compose-down:
+    desc: Stop the Compose deployment
+    cmds:
+      - cmd /c docker compose down
+
+  status:
+    desc: Show the running container and service health
+    cmds:
+      - cmd /c docker ps --filter "name={{.CONTAINER}}"
+      - powershell -NoProfile -Command "Invoke-RestMethod -Uri 'http://127.0.0.1:{{.PORT}}/health/ready' | ConvertTo-Json -Depth 8"
+
+  smoke:
+    desc: Check liveness, readiness, UI, and OpenAPI endpoints
+    cmds:
+      - powershell -NoProfile -Command "Invoke-RestMethod -Uri 'http://127.0.0.1:{{.PORT}}/health/live' | ConvertTo-Json"
+      - cmd: powershell -NoProfile -Command "if ((Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:{{.PORT}}/').StatusCode -ne 200) { exit 1 }; Write-Output 'UI HTTP 200'"
+      - cmd: powershell -NoProfile -Command "if ((Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:{{.PORT}}/openapi.json').StatusCode -ne 200) { exit 1 }; Write-Output 'OpenAPI HTTP 200'"
+
+  convert-test:
+    desc: Submit the bundled test image with the fast low-resolution profile
+    cmds:
+      - cmd: pwsh -NoProfile -Command "Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:{{.PORT}}/v1/layer-decompositions' -Form @{ file = Get-Item -LiteralPath '{{.TEST_IMAGE}}'; seed = '42'; resolution = '{{.TEST_RESOLUTION}}'; depth_resolution = '{{.TEST_DEPTH_RESOLUTION}}'; inference_steps = '{{.TEST_INFERENCE_STEPS}}'; group_offload = '{{.TEST_GROUP_OFFLOAD}}' } | ConvertTo-Json -Depth 8"
+
+  logs:
+    desc: Follow service and inference logs
+    cmds:
+      - cmd /c docker logs -f --tail 200 {{.CONTAINER}}
+
+  imagestop:
+    desc: Stop and remove the local service container
+    cmds:
+      - cmd: cmd /c docker rm -f {{.CONTAINER}}
+        ignore_error: true
+
+  imageweb:
+    desc: Open the local browser UI
+    cmds:
+      - cmd /c start http://127.0.0.1:{{.PORT}}

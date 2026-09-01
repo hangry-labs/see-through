@@ -1,0 +1,20 @@
+services:
+  see-through:
+    build:
+      context: .
+      target: ${SEE_THROUGH_TARGET:-tiny}
+    image: ${SEE_THROUGH_IMAGE:-see-through:tiny}
+    container_name: see_through
+    restart: unless-stopped
+    ports:
+      - "${SEE_THROUGH_PORT:-8000}:8000"
+    gpus: all
+    environment:
+      CUDA_VISIBLE_DEVICES: "${SEE_THROUGH_GPU_DEVICE:-0}"
+    volumes:
+      - see_through_hf_cache:/app/.cache/huggingface
+      - ./workspace:/app/workspace
+
+volumes:
+  see_through_hf_cache:
+

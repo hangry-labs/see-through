@@ -372,7 +372,7 @@ if __name__ == '__main__':
         },
         'none': {
             'layerdiff': 'layerdifforg/seethroughv0.0.2_layerdiff3d',
-            'depth': '24yearsold/seethroughv0.0.1_marigold',
+            'depth': 'layerdifforg/seethroughv0.0.1_marigold',
         },
     }
     defaults = REPO_MAP[args.quant_mode]

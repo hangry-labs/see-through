@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#111214">
+  <title>See-through</title>
+  <link rel="icon" href="/brand/favicon_small.png">
+  <link rel="stylesheet" href="/static/vendor/lucide/lucide.css">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body>
+  <header class="brand-hero">
+    <img class="brand-backdrop" src="/brand/banner.jpg" alt="" aria-hidden="true">
+    <div class="brand-shade"></div>
+    <nav class="brand-nav" aria-label="Application links">
+      <a class="brand-lockup" href="/" aria-label="See-through home">
+        <img src="/brand/logo_small.png" alt="Hangry Labs">
+        <span><strong>Hangry Labs</strong><small>Local image infrastructure</small></span>
+      </a>
+      <div class="brand-links">
+        <a class="primary-link" href="https://github.com/hangry-labs/see-through" target="_blank" rel="noreferrer"><i class="icon-git-branch"></i>GitHub</a>
+        <a href="/docs"><i class="icon-book-open"></i>API docs</a>
+        <a href="#system" data-tab-link="system"><i class="icon-boxes"></i>Models</a>
+        <a href="https://github.com/shitagaki-lab/see-through" target="_blank" rel="noreferrer"><i class="icon-external-link"></i>Upstream</a>
+      </div>
+    </nav>
+    <div class="brand-copy">
+      <h1><span class="title-highlight" data-text="See-through">See-through</span></h1>
+      <p>Private anime character layer decomposition with layered PSD export.</p>
+    </div>
+    <div class="runtime-badge" id="runtime-badge" data-state="starting">
+      <i class="icon-activity"></i>
+      <div class="runtime-copy"><strong id="runtime-title">Checking runtime</strong><span id="runtime-detail">Connecting to the local service…</span></div>
+      <span class="runtime-version" id="runtime-version">UI starting</span>
+    </div>
+  </header>
+
+  <div class="app-tabs" role="tablist" aria-label="Workspace views">
+    <button class="tab-button active" type="button" role="tab" data-tab="decompose" aria-selected="true">Decompose</button>
+    <button class="tab-button" type="button" role="tab" data-tab="api" aria-selected="false">API</button>
+    <button class="tab-button" type="button" role="tab" data-tab="system" aria-selected="false">System</button>
+  </div>
+
+  <main>
+    <section class="tab-panel" data-panel="decompose">
+      <form id="decompose-form" class="workspace">
+        <aside class="settings-panel">
+          <div class="section-title"><i class="icon-sliders-horizontal"></i><span>Generation</span></div>
+
+          <div class="pipeline-summary" aria-label="Generation model pipeline">
+            <span>MODEL PIPELINE</span>
+            <strong><i class="icon-layers-3"></i> LayerDiff 3D <b>→</b> Marigold Depth</strong>
+            <small>Both models run automatically for every PSD.</small>
+          </div>
+
+          <label class="field">
+            <span>Output resolution</span>
+            <select id="resolution" name="resolution">
+              <option value="1280">1280 px · Full quality</option>
+              <option value="1152">1152 px</option>
+              <option value="1024">1024 px · Lower VRAM</option>
+              <option value="896">896 px</option>
+              <option value="768" selected>768 px · Minimum</option>
+            </select>
+            <small>Controls the square working canvas. Larger values retain more detail.</small>
+          </label>
+
+          <label class="field">
+            <span>Depth resolution</span>
+            <select id="depth-resolution" name="depth_resolution">
+              <option value="768">768 px · Recommended</option>
+              <option value="640">640 px</option>
+              <option value="512" selected>512 px · Lower VRAM</option>
+              <option value="1024">1024 px · Fine detail</option>
+              <option value="1280">1280 px · Maximum</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Image framing</span>
+            <select id="crop-mode">
+              <option value="fit" selected>Preserve full image</option>
+              <option value="center-square">Center crop to square</option>
+            </select>
+            <small>Preserve adds transparent padding. Center crop removes the longer edges.</small>
+          </label>
+
+          <div class="field split-fields">
+            <label><span>Seed</span><input id="seed" name="seed" type="number" min="0" max="2147483647" value="42"></label>
+            <label><span>Steps</span><input id="steps" name="inference_steps" type="number" min="1" max="100" value="30"></label>
+          </div>
+
+          <label class="check-field">
+            <input id="group-offload" name="group_offload" type="checkbox" checked>
+            <span><strong>16 GB safe mode</strong><small>Offloads model blocks to provide a practical VRAM safety margin. Disable for maximum speed.</small></span>
+          </label>
+
+          <button id="generate-button" class="primary-button" type="submit" disabled>
+            <span><i class="icon-layers-3"></i> Generate layered PSD</span><i class="icon-arrow-right" aria-hidden="true"></i>
+          </button>
+          <div class="status-line" id="global-status" data-tone="neutral">Add an image to begin.</div>
+        </aside>
+
+        <div class="content-panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">SOURCE</p><h2>Character image</h2></div>
+            <button id="clear-image" class="text-button" type="button" hidden><i class="icon-x"></i> Clear image</button>
+          </div>
+
+          <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+          <button id="drop-zone" class="drop-zone" type="button">
+            <span class="upload-symbol" aria-hidden="true"><i class="icon-image-up"></i></span>
+            <strong>Drop your character image here</strong>
+            <span>or click to browse · PNG, JPEG, or WebP · 30 MiB max</span>
+          </button>
+
+          <div id="image-stage" class="image-stage" hidden>
+            <div class="checkerboard"><img id="image-preview" alt="Selected character preview"></div>
+            <div class="image-meta"><strong id="image-name"></strong><span id="image-details"></span></div>
+          </div>
+
+          <section id="job-progress" class="job-progress" hidden>
+            <div class="progress-heading">
+              <div><p class="eyebrow">PROCESSING</p><h2 id="job-stage">Starting</h2></div>
+              <div class="job-actions"><span id="job-id" class="job-id"></span><button id="cancel-job" class="stop-button" type="button"><i class="icon-square"></i> Stop generation</button></div>
+            </div>
+            <div class="progress-track"><span></span></div>
+            <pre id="job-log" class="job-log"></pre>
+          </section>
+
+          <section id="results" class="results" hidden>
+            <div class="panel-heading results-heading">
+              <div><p class="eyebrow">RESULT</p><h2>Generated assets</h2></div>
+              <a id="download-psd" class="download-button" href="#"><i class="icon-download"></i> Download PSD</a>
+            </div>
+            <p class="results-copy">Review the reconstructed image and generated semantic layers before downloading the editable file.</p>
+            <section id="puppet-preview" class="puppet-preview" hidden>
+              <div class="preview-heading">
+                <div><p class="eyebrow">2.5D PREVIEW</p><h3>Layer motion</h3></div>
+                <div class="preview-actions">
+                  <span id="preview-layer-count"></span>
+                  <button id="preview-toggle" class="text-button" type="button" aria-pressed="true"><i class="icon-pause"></i> Pause motion</button>
+                </div>
+              </div>
+              <div id="puppet-viewport" class="puppet-viewport" aria-label="Animated layered character preview">
+                <div id="puppet-rig" class="puppet-rig"></div>
+                <span class="preview-hint">Move your pointer to look around</span>
+              </div>
+              <label class="motion-control" for="motion-intensity">
+                <span>Motion strength</span>
+                <input id="motion-intensity" type="range" min="0" max="100" value="35">
+              </label>
+            </section>
+            <div id="asset-gallery" class="asset-gallery"></div>
+          </section>
+        </div>
+      </form>
+    </section>
+
+    <section class="tab-panel simple-panel" data-panel="api" hidden>
+      <p class="eyebrow">HTTP API</p>
+      <h2>Build local image workflows.</h2>
+      <p>The first API surface accepts an image, queues one GPU job, exposes progress, and serves the resulting PSD and preview assets.</p>
+      <div class="endpoint-list">
+        <code><b>POST</b> /v1/layer-decompositions</code>
+        <code><b>GET</b> /v1/layer-decompositions/{job_id}</code>
+        <code><b>DELETE</b> /v1/layer-decompositions/{job_id}</code>
+        <code><b>GET</b> /v1/layer-decompositions/{job_id}/download</code>
+        <code><b>GET</b> /health/ready</code>
+      </div>
+      <a class="secondary-button" href="/docs" target="_blank"><i class="icon-book-open"></i> Open interactive API docs</a>
+    </section>
+
+    <section class="tab-panel simple-panel" data-panel="system" hidden>
+      <div class="panel-heading"><div><p class="eyebrow">LOCAL RUNTIME</p><h2>System status</h2></div><button id="refresh-system" class="text-button" type="button"><i class="icon-refresh-cw"></i> Refresh</button></div>
+      <div id="model-list" class="model-list" aria-label="Configured models"></div>
+      <pre id="system-output" class="system-output">Loading…</pre>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+</body>
+</html>

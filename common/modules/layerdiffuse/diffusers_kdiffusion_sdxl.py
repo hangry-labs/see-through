@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Union, List, Optional
 import gc
+import os
 
 import numpy as np
 from tqdm.auto import trange
@@ -116,7 +117,10 @@ class KDiffusionStableDiffusionXLPipeline(StableDiffusionXLImg2ImgPipeline):
                     "zero": (DPMSolverSinglestepScheduler, {"use_karras_sigmas": True, **config_zero}),
                 },
             }
-            model_id = "frankjoshua/juggernautXL_version6Rundiffusion"
+            model_id = os.getenv(
+                "SEE_THROUGH_SCHEDULER_MODEL",
+                "frankjoshua/juggernautXL_version6Rundiffusion",
+            )
             scheduler_name = "DPMPP_2M_SDE"
             scheduler_config_name = "zero"
             scheduler_configs = schedulers[scheduler_name]

@@ -274,6 +274,40 @@ def center_square_pad_resize(img: np.ndarray, target_size, pad_value=0, upscale_
         return img
 
 
+def crop_head_region(img: np.ndarray, xywh):
+    """Crop a detected head with context, returning ``None`` for an empty box."""
+    if img.size == 0:
+        return None
+
+    ih, iw = img.shape[:2]
+    x, y, w, h = (int(value) for value in xywh)
+    if w <= 0 or h <= 0:
+        return None
+
+    x1 = max(0, min(x, iw))
+    y1 = max(0, min(y, ih))
+    x2 = max(0, min(x + w, iw))
+    y2 = max(0, min(y + h, ih))
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    crop_w = x2 - x1
+    crop_h = y2 - y1
+    if crop_w < iw // 2:
+        px = crop_w // 5
+        x1 = max(x1 - px, 0)
+        x2 = min(x2 + px, iw)
+    if crop_h < ih // 2:
+        py = crop_h // 5
+        y1 = max(y1 - py, 0)
+        y2 = min(y2 + py, ih)
+
+    cropped = img[y1:y2, x1:x2]
+    if cropped.size == 0:
+        return None
+    return cropped, (x1, y1, x2, y2)
+
+
 def random_hsv(img, hgain: float = 0.015, sgain: float = 0.6, vgain: float = 0.4):
     if hgain or sgain or vgain:
         dtype = img.dtype  # uint8

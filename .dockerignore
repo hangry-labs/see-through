@@ -1,0 +1,33 @@
+# Version-control and local tooling
+.git
+.gitignore
+.idea
+.vscode
+AGENTS.md
+
+# Python caches and build outputs
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Runtime data and credentials
+workspace/
+hf_credential
+*.token
+.env
+.env.*
+!*.example
+
+# Development surfaces not used by the runtime image
+test_assets/
+
+# Local artifacts
+tmp/
+*.log
+wandb/

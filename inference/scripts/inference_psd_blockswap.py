@@ -404,7 +404,7 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     print('\nBuilding Marigold depth pipeline...')
-    marigold_args = argparse.Namespace(quant_mode='none', cpu_offload=False, repo_id_depth='24yearsold/seethroughv0.0.1_marigold')
+    marigold_args = argparse.Namespace(quant_mode='none', cpu_offload=False, repo_id_depth='layerdifforg/seethroughv0.0.1_marigold')
     marigold_pipe = build_marigold_pipeline(marigold_args)
 
     print('Running Marigold depth...')
