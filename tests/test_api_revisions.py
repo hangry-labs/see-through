@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -40,6 +41,7 @@ class RevisionApiTests(unittest.TestCase):
         (root / "output" / "input").mkdir(parents=True)
         Image.new("RGBA", (64, 64), (1, 2, 3, 255)).save(runtime.input_path(self.parent.id))
         Image.new("RGBA", (64, 64), (1, 2, 3, 255)).save(root / "output" / "input" / "src_img.png")
+        Image.new("RGBA", (64, 64), (10, 20, 30, 255)).save(root / "output" / "input" / "front hair.png")
         runtime.persist_job(self.parent)
         self.client = TestClient(application.app)
 
@@ -90,6 +92,37 @@ class RevisionApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertIn("already running", response.json()["detail"])
+
+    def test_detail_edit_endpoint_stages_mask_as_an_immutable_child(self):
+        mask_file = BytesIO()
+        Image.new("L", (64, 64), 127).save(mask_file, format="PNG")
+        with patch.object(application, "run_job"):
+            response = self.client.post(
+                f"/v1/layer-decompositions/{self.parent.id}/edits",
+                data={"part": "front hair"},
+                files={"mask": ("mask.png", mask_file.getvalue(), "image/png")},
+            )
+
+        self.assertEqual(response.status_code, 202)
+        payload = response.json()
+        self.assertEqual(payload["kind"], "edit")
+        self.assertEqual(payload["parent_job_id"], self.parent.id)
+        self.assertEqual(payload["replaced_parts"], ["front hair"])
+        self.assertEqual(payload["revision_number"], 1)
+        self.assertTrue((runtime.job_root(payload["id"]) / "edit-mask.png").is_file())
+        self.assertTrue(runtime.input_path(payload["id"]).is_file())
+
+    def test_detail_edit_endpoint_rejects_a_misaligned_mask(self):
+        mask_file = BytesIO()
+        Image.new("L", (32, 64), 255).save(mask_file, format="PNG")
+        response = self.client.post(
+            f"/v1/layer-decompositions/{self.parent.id}/edits",
+            data={"part": "front hair"},
+            files={"mask": ("mask.png", mask_file.getvalue(), "image/png")},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("dimensions must be 64x64", response.json()["detail"])
 
 
 if __name__ == "__main__":

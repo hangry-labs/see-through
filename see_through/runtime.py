@@ -109,7 +109,7 @@ def create_job(
                     default=0,
                 )
                 + 1
-                if kind == "revision"
+                if kind in {"revision", "edit"}
                 else 0
             )
         job = Job(
@@ -314,6 +314,8 @@ def _set_stage(job: Job, line: str) -> None:
         job.stage = "layer-stitching"
     elif "running marigold" in lowered:
         job.stage = "depth-estimation"
+    elif "applying original pixels" in lowered:
+        job.stage = "layer-editing"
     elif "building revised psd" in lowered or "psd saved" in lowered:
         job.stage = "psd-assembly"
 
@@ -365,7 +367,7 @@ def run_job(job_id: str) -> None:
 
     settings = job.settings
     command = [sys.executable, "-u"]
-    if job.kind == "revision":
+    if job.kind in {"revision", "edit"}:
         if not job.parent_job_id:
             job.status = "failed"
             job.stage = "failed"
@@ -376,15 +378,42 @@ def run_job(job_id: str) -> None:
                 if _active_job_id == job.id:
                     _active_job_id = None
             return
-        command.extend(
-            [
-                str(APP_ROOT / "inference" / "scripts" / "inference_revision.py"),
-                "--parent_dir",
-                str(output_root(job.parent_job_id) / "input"),
-            ]
-        )
-        for part in job.replaced_parts:
-            command.extend(["--replace_tag", part])
+        if job.kind == "edit":
+            if len(job.replaced_parts) != 1:
+                job.status = "failed"
+                job.stage = "failed"
+                job.error = "detail edit must contain exactly one layer"
+                job.completed_at = utc_now()
+                persist_job(job)
+                with _state_lock:
+                    if _active_job_id == job.id:
+                        _active_job_id = None
+                return
+            command.extend(
+                [
+                    str(APP_ROOT / "inference" / "scripts" / "inference_layer_edit.py"),
+                    "--parent_dir",
+                    str(output_root(job.parent_job_id) / "input"),
+                    "--part",
+                    job.replaced_parts[0],
+                    "--mask",
+                    str(job_root(job.id) / "edit-mask.png"),
+                    "--srcp",
+                    str(input_path(job_id)),
+                    "--save_dir",
+                    str(output_root(job_id)),
+                ]
+            )
+        else:
+            command.extend(
+                [
+                    str(APP_ROOT / "inference" / "scripts" / "inference_revision.py"),
+                    "--parent_dir",
+                    str(output_root(job.parent_job_id) / "input"),
+                ]
+            )
+            for part in job.replaced_parts:
+                command.extend(["--replace_tag", part])
     else:
         command.extend(
             [
@@ -392,30 +421,36 @@ def run_job(job_id: str) -> None:
                 "--save_to_psd",
             ]
         )
-    command.extend(
-        [
-            "--srcp",
-            str(input_path(job_id)),
-            "--save_dir",
-            str(output_root(job_id)),
-            "--seed",
-            str(settings["seed"]),
-            "--resolution",
-            str(settings["resolution"]),
-            "--resolution_depth",
-            str(settings["depth_resolution"]),
-            "--inference_steps",
-            str(settings["inference_steps"]),
-            "--repo_id_layerdiff",
-            LAYERDIFF_MODEL,
-            "--repo_id_depth",
-            DEPTH_MODEL,
-        ]
-    )
-    if settings.get("group_offload"):
-        command.append("--group_offload")
+    if job.kind != "edit":
+        command.extend(
+            [
+                "--srcp",
+                str(input_path(job_id)),
+                "--save_dir",
+                str(output_root(job_id)),
+                "--seed",
+                str(settings["seed"]),
+                "--resolution",
+                str(settings["resolution"]),
+                "--resolution_depth",
+                str(settings["depth_resolution"]),
+                "--inference_steps",
+                str(settings["inference_steps"]),
+                "--repo_id_layerdiff",
+                LAYERDIFF_MODEL,
+                "--repo_id_depth",
+                DEPTH_MODEL,
+            ]
+        )
+        if settings.get("group_offload"):
+            command.append("--group_offload")
 
-    job.logs.append("Starting See-through revision" if job.kind == "revision" else "Starting See-through inference")
+    start_labels = {
+        "generation": "Starting See-through inference",
+        "revision": "Starting See-through revision",
+        "edit": "Starting See-through detail edit",
+    }
+    job.logs.append(start_labels.get(job.kind, "Starting See-through job"))
     job.logs.append("Command settings: " + ", ".join(f"{key}={value}" for key, value in settings.items()))
     persist_job(job)
 
@@ -575,7 +610,7 @@ def load_jobs_from_disk() -> None:
             (
                 job
                 for job in _jobs.values()
-                if (job.root_job_id or job.id) == root_id and job.kind == "revision"
+                if (job.root_job_id or job.id) == root_id and job.kind in {"revision", "edit"}
             ),
             key=lambda job: (job.created_at, job.id),
         )

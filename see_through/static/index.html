@@ -204,6 +204,7 @@
         <code><b>GET</b> /v1/layer-decompositions/{job_id}</code>
         <code><b>DELETE</b> /v1/layer-decompositions/{job_id}</code>
         <code><b>POST</b> /v1/layer-decompositions/{job_id}/revisions</code>
+        <code><b>POST</b> /v1/layer-decompositions/{job_id}/edits</code>
         <code><b>GET</b> /v1/layer-decompositions/{job_id}/revisions</code>
         <code><b>POST</b> /v1/layer-decompositions/{job_id}/accept</code>
         <code><b>GET</b> /v1/layer-decompositions/{job_id}/download</code>
@@ -218,6 +219,59 @@
       <pre id="system-output" class="system-output">Loading…</pre>
     </section>
   </main>
+
+  <dialog id="layer-editor" class="layer-editor">
+    <div class="editor-shell">
+      <header class="editor-header">
+        <div><p class="eyebrow">DETAIL RECOVERY</p><h2 id="editor-title">Edit layer</h2></div>
+        <div class="editor-header-actions">
+          <span id="editor-dimensions"></span>
+          <button id="close-editor" class="text-button" type="button"><i class="icon-x"></i> Close</button>
+        </div>
+      </header>
+      <div class="editor-body">
+        <aside class="editor-tools">
+          <fieldset class="editor-tool-group">
+            <legend>Paint mode</legend>
+            <div class="mode-switch">
+              <label><input type="radio" name="paint-mode" value="restore" checked><span><i class="icon-paintbrush"></i> Restore original</span></label>
+              <label><input type="radio" name="paint-mode" value="generated"><span><i class="icon-eraser"></i> Use generated</span></label>
+            </div>
+            <small>Paint original pixels back in, or erase restoration to return to the generated layer.</small>
+          </fieldset>
+          <label class="editor-range"><span>Brush size <output id="brush-size-value">36 px</output></span><input id="brush-size" type="range" min="2" max="240" value="36"></label>
+          <label class="editor-range"><span>Brush hardness <output id="brush-hardness-value">80%</output></span><input id="brush-hardness" type="range" min="0" max="100" value="80"></label>
+          <p class="editor-tool-note">Outer ring: full brush reach · Inner ring: solid core</p>
+          <div class="editor-button-row">
+            <button id="editor-undo" class="text-button" type="button" disabled><i class="icon-undo-2"></i> Undo</button>
+            <button id="editor-redo" class="text-button" type="button" disabled><i class="icon-redo-2"></i> Redo</button>
+          </div>
+          <fieldset class="editor-tool-group">
+            <legend>Inspection</legend>
+            <label class="editor-range"><span>Original reference <output id="original-opacity-value">45%</output></span><input id="original-opacity" type="range" min="0" max="100" value="45"></label>
+            <label class="editor-range"><span>Selected layer <output id="asset-opacity-value">100%</output></span><input id="asset-opacity" type="range" min="0" max="100" value="100"></label>
+            <label class="editor-range"><span>Other layers <output id="other-opacity-value">0%</output></span><input id="other-opacity" type="range" min="0" max="100" value="0"></label>
+            <label class="editor-select"><span>Backdrop</span><select id="editor-backdrop"><option value="checker">Checkerboard</option><option value="white">White</option><option value="black">Black</option><option value="custom">Custom colour</option></select></label>
+            <label id="custom-backdrop-field" class="editor-color" hidden><span>Custom colour</span><input id="custom-backdrop" type="color" value="#7a7a7a"></label>
+          </fieldset>
+          <label class="editor-range"><span>Zoom <output id="editor-zoom-value">100%</output></span><input id="editor-zoom" type="range" min="10" max="1200" value="100"></label>
+          <button id="editor-fit" class="text-button editor-fit" type="button"><i class="icon-maximize-2"></i> Fit canvas</button>
+        </aside>
+        <div id="editor-viewport" class="editor-viewport" data-backdrop="checker">
+          <canvas id="editor-canvas" aria-label="Paint source pixels into the selected semantic layer"></canvas>
+          <div id="editor-brush-cursor" class="editor-brush-cursor" data-mode="restore" hidden><span></span></div>
+          <span class="editor-canvas-hint">Drag to paint · Mouse wheel zoom · Ctrl+Z undo · [ ] brush size</span>
+        </div>
+      </div>
+      <footer class="editor-footer">
+        <p id="editor-status">Paint over details that should come from the original image.</p>
+        <div>
+          <button id="cancel-editor" class="secondary-button" type="button">Cancel</button>
+          <button id="save-editor" class="download-button" type="button"><i class="icon-save"></i> Save detail revision</button>
+        </div>
+      </footer>
+    </div>
+  </dialog>
 
   <div id="toast" class="toast" hidden></div>
 </body>

@@ -14,6 +14,13 @@ const previewState = {
   pointerX: 0, pointerY: 0, currentX: 0, currentY: 0,
   layers: [], startedAt: 0, comparing: false,
 }
+const editorState = {
+  job: null, part: null, base: null, original: null, layers: [], depths: new Map(),
+  maskCanvas: document.createElement('canvas'), editedCanvas: document.createElement('canvas'),
+  sourceCanvas: document.createElement('canvas'), undo: [], redo: [], painting: false,
+  lastPoint: null, distanceToNextDab: 0, renderPending: false,
+  cursorX: 0, cursorY: 0, cursorVisible: false,
+}
 
 function setStatus(message, tone = 'neutral') {
   $('#global-status').textContent = message
@@ -51,6 +58,7 @@ function stageLabel(stage) {
     'layer-decomposition': 'Generating semantic layers',
     'layer-stitching': 'Stitching selected layers',
     'depth-estimation': 'Estimating layer depth',
+    'layer-editing': 'Applying detail edits',
     'psd-assembly': 'Building the layered PSD',
     canceling: 'Stopping generation', canceled: 'Generation canceled',
     completed: 'Generation complete', failed: 'Generation failed',
@@ -211,7 +219,9 @@ async function pollJob() {
       $('#generate-button').disabled = false
       $('#cancel-job').hidden = true
       setStatus(
-        job.kind === 'revision' ? 'Candidate revision ready for review.' : 'Layered PSD generated successfully.',
+        job.kind === 'edit' ? 'Detail edit ready for review.'
+          : job.kind === 'revision' ? 'Candidate revision ready for review.'
+            : 'Layered PSD generated successfully.',
         'success',
       )
       renderResults(job)
@@ -258,7 +268,7 @@ function renderResults(job) {
   const gallery = $('#asset-gallery')
   gallery.replaceChildren()
   $('#download-psd').href = job.download_url
-  const candidate = job.kind === 'revision' && !job.accepted_at
+  const candidate = job.kind !== 'generation' && !job.accepted_at
   $('#result-eyebrow').textContent = candidate ? 'REVISION PREVIEW' : job.revision_number ? 'KEPT REVISION' : 'RESULT'
   $('#result-title').textContent = candidate ? 'Review candidate' : 'Generated assets'
   $('#results-copy').textContent = candidate
@@ -266,11 +276,16 @@ function renderResults(job) {
     : 'Select any imperfect or missing semantic layers below to generate a non-destructive revision.'
   $('#revision-review').hidden = !candidate
   $('#refinement-panel').hidden = candidate
+  $('#retry-revision').hidden = job.kind === 'edit'
   if (candidate) {
     $$('.revision-review-actions button').forEach((button) => { button.disabled = false })
     const names = job.replaced_parts.map(formatPartName)
-    $('#revision-review-title').textContent = `Revision ${job.revision_number} · seed ${job.settings.seed}`
-    $('#revision-review-copy').textContent = `Replaced ${formatNameList(names)}. The parent result remains unchanged.`
+    $('#revision-review-title').textContent = job.kind === 'edit'
+      ? `Revision ${job.revision_number} · detail edit`
+      : `Revision ${job.revision_number} · seed ${job.settings.seed}`
+    $('#revision-review-copy').textContent = job.kind === 'edit'
+      ? `Restored original detail in ${formatNameList(names)}. The parent result remains unchanged.`
+      : `Replaced ${formatNameList(names)}. The parent result remains unchanged.`
   }
 
   ;(job.parts || []).forEach((part) => {
@@ -279,6 +294,7 @@ function renderResults(job) {
     card.dataset.part = part.name
     card.dataset.visible = String(Boolean(part.visible))
     card.dataset.replaced = String(job.replaced_parts.includes(part.name))
+    card.dataset.edited = String(Boolean(part.edited))
     const label = document.createElement('label')
     label.className = 'asset-select'
     const checkbox = document.createElement('input')
@@ -308,7 +324,9 @@ function renderResults(job) {
     size.textContent = part.available ? humanBytes(part.size) : 'No generated file'
     const visibility = document.createElement('span')
     visibility.className = 'part-state'
-    visibility.textContent = job.replaced_parts.includes(part.name)
+    visibility.textContent = part.edited
+      ? `detail edited · ${part.visible ? part.group : 'empty'}`
+      : job.replaced_parts.includes(part.name)
       ? `replacement · ${part.visible ? part.group : 'empty'}`
       : part.visible ? part.group : 'empty · retryable'
     caption.append(name, size, visibility)
@@ -323,6 +341,17 @@ function renderResults(job) {
       link.title = `Open ${part.name} layer`
       link.innerHTML = '<i class="icon-external-link"></i>'
       card.append(link)
+    }
+    if (part.url && job.accepted_at) {
+      const actions = document.createElement('div')
+      actions.className = 'asset-card-actions'
+      const edit = document.createElement('button')
+      edit.type = 'button'
+      edit.className = 'text-button asset-edit'
+      edit.innerHTML = `<i class="icon-paintbrush"></i> ${part.edited ? 'Continue editing' : 'Edit details'}`
+      edit.addEventListener('click', () => openLayerEditor(job, part))
+      actions.append(edit)
+      card.append(actions)
     }
     gallery.append(card)
   })
@@ -376,7 +405,9 @@ async function renderRevisionHistory(job) {
       ? formatNameList(item.replaced_parts.map(formatPartName))
       : 'Initial decomposition'
     const detail = document.createElement('span')
-    detail.textContent = `Seed ${item.settings.seed ?? 'unknown'} · ${stageLabel(item.stage)}`
+    detail.textContent = item.kind === 'edit'
+      ? `Manual detail edit · ${stageLabel(item.stage)}`
+      : `Seed ${item.settings.seed ?? 'unknown'} · ${stageLabel(item.stage)}`
     copy.append(title, detail)
     const badge = document.createElement('span')
     badge.className = 'revision-badge'
@@ -503,6 +534,493 @@ $('#retry-revision').addEventListener('click', () => {
 
 $('#return-to-parent').addEventListener('click', () => {
   if (state.currentJob?.parent_job_id) showJob(state.currentJob.parent_job_id)
+})
+
+function loadEditorImage(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error(`Could not load editor asset: ${url}`))
+    image.src = url
+  })
+}
+
+function editorAsset(job, filename, exactPath = null) {
+  return job.assets.find((asset) => exactPath ? asset.path === exactPath : asset.name === filename)
+}
+
+async function openLayerEditor(job, part) {
+  const dialog = $('#layer-editor')
+  if (!dialog.open) dialog.showModal()
+  $('#editor-title').textContent = `Edit ${formatPartName(part.name)}`
+  $('#editor-status').textContent = 'Loading full-resolution layer assets…'
+  $('#save-editor').disabled = true
+  editorState.job = job
+  editorState.part = part
+  editorState.undo = []
+  editorState.redo = []
+  updateEditorHistoryButtons()
+
+  try {
+    const originalAsset = editorAsset(job, 'src_img.png', 'output/input/src_img.png')
+      || editorAsset(job, 'src_img.png')
+    if (!originalAsset || !part.base_url) throw new Error('This result does not contain editable source assets.')
+    const metadataAsset = editorAsset(job, 'input.psd.json')
+    const metadataPromise = metadataAsset
+      ? fetch(metadataAsset.url).then(async (response) => response.ok ? response.json() : {})
+      : Promise.resolve({})
+    const [base, original, metadata, maskImage, layerResults] = await Promise.all([
+      loadEditorImage(part.base_url),
+      loadEditorImage(originalAsset.url),
+      metadataPromise,
+      part.edit_mask_url ? loadEditorImage(part.edit_mask_url) : Promise.resolve(null),
+      Promise.all((job.parts || []).filter((item) => item.url).map(async (item) => ({
+        name: item.name,
+        image: await loadEditorImage(item.url),
+      }))),
+    ])
+    if (editorState.job?.id !== job.id || editorState.part?.name !== part.name) return
+    if (base.naturalWidth !== original.naturalWidth || base.naturalHeight !== original.naturalHeight) {
+      throw new Error('The generated layer and original image are not aligned.')
+    }
+    editorState.base = base
+    editorState.original = original
+    editorState.layers = layerResults
+    editorState.depths = new Map(Object.entries(metadata.parts || {}).map(([name, value]) => [
+      name,
+      Number.isFinite(value.depth_median) ? value.depth_median : 0.5,
+    ]))
+
+    const width = base.naturalWidth
+    const height = base.naturalHeight
+    for (const canvas of [$('#editor-canvas'), editorState.maskCanvas, editorState.editedCanvas, editorState.sourceCanvas]) {
+      canvas.width = width
+      canvas.height = height
+    }
+    const maskContext = editorState.maskCanvas.getContext('2d', { willReadFrequently: true })
+    maskContext.globalCompositeOperation = 'source-over'
+    maskContext.globalAlpha = 1
+    maskContext.clearRect(0, 0, width, height)
+    if (maskImage) {
+      maskContext.drawImage(maskImage, 0, 0, width, height)
+      const pixels = maskContext.getImageData(0, 0, width, height)
+      for (let index = 0; index < pixels.data.length; index += 4) {
+        const coverage = Math.round(pixels.data[index] * pixels.data[index + 3] / 255)
+        pixels.data[index] = 255
+        pixels.data[index + 1] = 255
+        pixels.data[index + 2] = 255
+        pixels.data[index + 3] = coverage
+      }
+      maskContext.putImageData(pixels, 0, 0)
+    }
+    $('#editor-dimensions').textContent = `${width} × ${height} px`
+    $('#editor-status').textContent = 'Paint original details into this layer. Saving creates a reviewable revision.'
+    $('#save-editor').disabled = false
+    requestEditorRender()
+    requestAnimationFrame(fitEditorCanvas)
+  } catch (error) {
+    $('#editor-status').textContent = error.message
+    showToast(error.message)
+  }
+}
+
+function closeLayerEditor() {
+  const dialog = $('#layer-editor')
+  if (dialog.open) dialog.close()
+  editorState.job = null
+  editorState.part = null
+  editorState.base = null
+  editorState.original = null
+  editorState.layers = []
+  editorState.undo = []
+  editorState.redo = []
+  editorState.cursorVisible = false
+  $('#editor-brush-cursor').hidden = true
+}
+
+function renderEditedLayer() {
+  if (!editorState.base || !editorState.original) return
+  const { width, height } = editorState.editedCanvas
+  const edited = editorState.editedCanvas.getContext('2d')
+  edited.clearRect(0, 0, width, height)
+  edited.globalCompositeOperation = 'source-over'
+  edited.globalAlpha = 1
+  edited.drawImage(editorState.base, 0, 0, width, height)
+  edited.globalCompositeOperation = 'destination-out'
+  edited.drawImage(editorState.maskCanvas, 0, 0)
+
+  const source = editorState.sourceCanvas.getContext('2d')
+  source.clearRect(0, 0, width, height)
+  source.globalCompositeOperation = 'source-over'
+  source.drawImage(editorState.original, 0, 0, width, height)
+  source.globalCompositeOperation = 'destination-in'
+  source.drawImage(editorState.maskCanvas, 0, 0)
+  edited.globalCompositeOperation = 'source-over'
+  edited.drawImage(editorState.sourceCanvas, 0, 0)
+}
+
+function requestEditorRender() {
+  if (editorState.renderPending) return
+  editorState.renderPending = true
+  requestAnimationFrame(() => {
+    editorState.renderPending = false
+    renderLayerEditor()
+  })
+}
+
+function renderLayerEditor() {
+  if (!editorState.base || !editorState.part) return
+  renderEditedLayer()
+  const canvas = $('#editor-canvas')
+  const context = canvas.getContext('2d')
+  context.clearRect(0, 0, canvas.width, canvas.height)
+  context.globalAlpha = Number($('#original-opacity').value) / 100
+  context.drawImage(editorState.original, 0, 0, canvas.width, canvas.height)
+
+  const otherOpacity = Number($('#other-opacity').value) / 100
+  const assetOpacity = Number($('#asset-opacity').value) / 100
+  const layers = [...editorState.layers].sort((left, right) => (
+    (editorState.depths.get(right.name) ?? 0.5) - (editorState.depths.get(left.name) ?? 0.5)
+  ))
+  if (otherOpacity === 0) {
+    context.globalAlpha = assetOpacity
+    context.drawImage(editorState.editedCanvas, 0, 0)
+  } else {
+    let drewSelected = false
+    layers.forEach((layer) => {
+      if (layer.name === editorState.part.name) drewSelected = true
+      context.globalAlpha = layer.name === editorState.part.name ? assetOpacity : otherOpacity
+      context.drawImage(
+        layer.name === editorState.part.name ? editorState.editedCanvas : layer.image,
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+      )
+    })
+    if (!drewSelected) {
+      context.globalAlpha = assetOpacity
+      context.drawImage(editorState.editedCanvas, 0, 0)
+    }
+  }
+  context.globalAlpha = 1
+}
+
+function editorPoint(event) {
+  const canvas = $('#editor-canvas')
+  const bounds = canvas.getBoundingClientRect()
+  return {
+    x: (event.clientX - bounds.left) * canvas.width / bounds.width,
+    y: (event.clientY - bounds.top) * canvas.height / bounds.height,
+  }
+}
+
+function updateEditorBrushCursor(event = null) {
+  if (event) {
+    editorState.cursorX = event.clientX
+    editorState.cursorY = event.clientY
+  }
+  const cursor = $('#editor-brush-cursor')
+  const canvas = $('#editor-canvas')
+  const bounds = canvas.getBoundingClientRect()
+  const insideCanvas = editorState.cursorX >= bounds.left && editorState.cursorX <= bounds.right
+    && editorState.cursorY >= bounds.top && editorState.cursorY <= bounds.bottom
+  if (!editorState.cursorVisible || !editorState.base || !insideCanvas || !bounds.width) {
+    cursor.hidden = true
+    return
+  }
+  const diameter = Number($('#brush-size').value) * bounds.width / canvas.width
+  const hardness = Number($('#brush-hardness').value) / 100
+  const hardCore = hardness ** 1.7
+  cursor.hidden = false
+  cursor.style.left = `${editorState.cursorX}px`
+  cursor.style.top = `${editorState.cursorY}px`
+  cursor.style.width = `${diameter}px`
+  cursor.style.height = `${diameter}px`
+  cursor.dataset.mode = $(`input[name="paint-mode"]:checked`).value
+  const inner = $('span', cursor)
+  inner.style.width = `${hardCore * 100}%`
+  inner.style.height = `${hardCore * 100}%`
+  inner.style.opacity = hardCore > 0.015 ? '1' : '0'
+}
+
+function editorBrushCharacteristics() {
+  const radius = Number($('#brush-size').value) / 2
+  const hardness = Number($('#brush-hardness').value) / 100
+  return {
+    radius,
+    hardness,
+    hardCore: hardness ** 1.7,
+    peakOpacity: 0.28 + 0.72 * hardness ** 0.8,
+    spacing: Math.max(1, radius * (0.2 + (1 - hardness) * 0.35)),
+  }
+}
+
+function paintEditorDab(point) {
+  const context = editorState.maskCanvas.getContext('2d', { willReadFrequently: true })
+  const { radius, hardness, hardCore, peakOpacity } = editorBrushCharacteristics()
+  context.globalCompositeOperation = $(`input[name="paint-mode"]:checked`).value === 'restore'
+    ? 'source-over'
+    : 'destination-out'
+  if (hardness >= 0.999) {
+    context.fillStyle = 'rgba(255,255,255,1)'
+  } else {
+    const gradient = context.createRadialGradient(point.x, point.y, 0, point.x, point.y, radius)
+    const shoulder = hardCore + (1 - hardCore) * 0.45
+    gradient.addColorStop(0, `rgba(255,255,255,${peakOpacity})`)
+    if (hardCore > 0.001) gradient.addColorStop(hardCore, `rgba(255,255,255,${peakOpacity})`)
+    gradient.addColorStop(shoulder, `rgba(255,255,255,${peakOpacity * 0.35})`)
+    gradient.addColorStop(1, 'rgba(255,255,255,0)')
+    context.fillStyle = gradient
+  }
+  context.beginPath()
+  context.arc(point.x, point.y, radius, 0, Math.PI * 2)
+  context.fill()
+}
+
+function paintEditorStroke(from, to) {
+  const { spacing } = editorBrushCharacteristics()
+  const distance = Math.hypot(to.x - from.x, to.y - from.y)
+  if (distance === 0) return
+  let traveled = 0
+  let distanceToNext = editorState.distanceToNextDab || spacing
+  let painted = false
+  while (traveled + distanceToNext <= distance) {
+    traveled += distanceToNext
+    const fraction = traveled / distance
+    paintEditorDab({
+      x: from.x + (to.x - from.x) * fraction,
+      y: from.y + (to.y - from.y) * fraction,
+    })
+    painted = true
+    distanceToNext = spacing
+  }
+  editorState.distanceToNextDab = distanceToNext - (distance - traveled)
+  if (painted) requestEditorRender()
+}
+
+function editorMaskSnapshot() {
+  return editorState.maskCanvas.getContext('2d', { willReadFrequently: true }).getImageData(
+    0,
+    0,
+    editorState.maskCanvas.width,
+    editorState.maskCanvas.height,
+  )
+}
+
+function updateEditorHistoryButtons() {
+  $('#editor-undo').disabled = editorState.undo.length === 0
+  $('#editor-redo').disabled = editorState.redo.length === 0
+}
+
+function restoreEditorSnapshot(from, to) {
+  if (!from.length) return
+  to.push(editorMaskSnapshot())
+  if (to.length > 8) to.shift()
+  editorState.maskCanvas.getContext('2d', { willReadFrequently: true }).putImageData(from.pop(), 0, 0)
+  updateEditorHistoryButtons()
+  requestEditorRender()
+}
+
+function setEditorZoom(value) {
+  const zoom = Math.max(10, Math.min(1200, Math.round(value)))
+  $('#editor-zoom').value = String(zoom)
+  $('#editor-zoom-value').textContent = `${zoom}%`
+  const canvas = $('#editor-canvas')
+  canvas.style.width = `${canvas.width * zoom / 100}px`
+  canvas.style.height = `${canvas.height * zoom / 100}px`
+  updateEditorBrushCursor()
+}
+
+function zoomEditorAt(value, clientX, clientY) {
+  const viewport = $('#editor-viewport')
+  const canvas = $('#editor-canvas')
+  const oldBounds = canvas.getBoundingClientRect()
+  if (!oldBounds.width || !oldBounds.height) return
+  const insideCanvas = clientX >= oldBounds.left && clientX <= oldBounds.right
+    && clientY >= oldBounds.top && clientY <= oldBounds.bottom
+  const anchorX = insideCanvas ? clientX : viewport.getBoundingClientRect().left + viewport.clientWidth / 2
+  const anchorY = insideCanvas ? clientY : viewport.getBoundingClientRect().top + viewport.clientHeight / 2
+  const imageX = (anchorX - oldBounds.left) / oldBounds.width
+  const imageY = (anchorY - oldBounds.top) / oldBounds.height
+  setEditorZoom(value)
+  const newBounds = canvas.getBoundingClientRect()
+  viewport.scrollLeft += newBounds.left + imageX * newBounds.width - anchorX
+  viewport.scrollTop += newBounds.top + imageY * newBounds.height - anchorY
+  updateEditorBrushCursor()
+}
+
+function fitEditorCanvas() {
+  const viewport = $('#editor-viewport')
+  const canvas = $('#editor-canvas')
+  if (!canvas.width || !viewport.clientWidth) return
+  const scale = Math.min(
+    (viewport.clientWidth - 36) / canvas.width,
+    (viewport.clientHeight - 54) / canvas.height,
+    1,
+  )
+  setEditorZoom(scale * 100)
+}
+
+function exportEditorMask() {
+  const canvas = document.createElement('canvas')
+  canvas.width = editorState.maskCanvas.width
+  canvas.height = editorState.maskCanvas.height
+  const context = canvas.getContext('2d')
+  context.fillStyle = '#000'
+  context.fillRect(0, 0, canvas.width, canvas.height)
+  context.drawImage(editorState.maskCanvas, 0, 0)
+  return new Promise((resolve, reject) => canvas.toBlob(
+    (blob) => blob ? resolve(blob) : reject(new Error('Could not encode the detail mask.')),
+    'image/png',
+  ))
+}
+
+async function saveLayerEditor() {
+  if (!editorState.job || !editorState.part) return
+  const parentJob = editorState.job
+  const part = editorState.part
+  const button = $('#save-editor')
+  button.disabled = true
+  $('#editor-status').textContent = 'Saving mask and preparing the edited PSD…'
+  try {
+    const mask = await exportEditorMask()
+    const body = new FormData()
+    body.append('part', part.name)
+    body.append('mask', mask, `${part.name}-detail-mask.png`)
+    const response = await fetch(`/v1/layer-decompositions/${parentJob.id}/edits`, { method: 'POST', body })
+    if (!response.ok) throw new Error(await responseError(response))
+    const job = await response.json()
+    closeLayerEditor()
+    state.jobId = job.id
+    history.replaceState({}, '', `?job=${job.id}`)
+    $('#job-id').textContent = job.id.slice(0, 12)
+    $('#job-progress').hidden = false
+    setProgressState('active')
+    $('#job-stage').textContent = 'Applying detail edit'
+    $('#job-log').textContent = ''
+    $('#cancel-job').hidden = false
+    $('#cancel-job').disabled = false
+    $('#cancel-job').innerHTML = '<i class="icon-square"></i> Stop edit'
+    setStatus(`Building an edited ${formatPartName(part.name)} revision…`)
+    $('#job-progress').scrollIntoView({ behavior: 'smooth', block: 'start' })
+    pollJob()
+  } catch (error) {
+    button.disabled = false
+    $('#editor-status').textContent = error.message
+    showToast(error.message)
+  }
+}
+
+const editorCanvas = $('#editor-canvas')
+editorCanvas.addEventListener('pointerenter', (event) => {
+  editorState.cursorVisible = true
+  updateEditorBrushCursor(event)
+})
+editorCanvas.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0 || !editorState.base) return
+  event.preventDefault()
+  editorCanvas.setPointerCapture(event.pointerId)
+  editorState.undo.push(editorMaskSnapshot())
+  if (editorState.undo.length > 8) editorState.undo.shift()
+  editorState.redo = []
+  updateEditorHistoryButtons()
+  editorState.painting = true
+  editorState.lastPoint = editorPoint(event)
+  editorState.distanceToNextDab = editorBrushCharacteristics().spacing
+  paintEditorDab(editorState.lastPoint)
+  requestEditorRender()
+})
+editorCanvas.addEventListener('pointermove', (event) => {
+  updateEditorBrushCursor(event)
+  if (!editorState.painting) return
+  const point = editorPoint(event)
+  paintEditorStroke(editorState.lastPoint, point)
+  editorState.lastPoint = point
+})
+function finishEditorStroke() {
+  editorState.painting = false
+  editorState.lastPoint = null
+  editorState.distanceToNextDab = 0
+}
+editorCanvas.addEventListener('pointerup', finishEditorStroke)
+editorCanvas.addEventListener('pointercancel', finishEditorStroke)
+editorCanvas.addEventListener('lostpointercapture', finishEditorStroke)
+editorCanvas.addEventListener('pointerleave', () => {
+  editorState.cursorVisible = false
+  updateEditorBrushCursor()
+})
+
+$('#editor-undo').addEventListener('click', () => restoreEditorSnapshot(editorState.undo, editorState.redo))
+$('#editor-redo').addEventListener('click', () => restoreEditorSnapshot(editorState.redo, editorState.undo))
+$('#editor-fit').addEventListener('click', fitEditorCanvas)
+$('#editor-zoom').addEventListener('input', (event) => {
+  const bounds = $('#editor-viewport').getBoundingClientRect()
+  zoomEditorAt(Number(event.target.value), bounds.left + bounds.width / 2, bounds.top + bounds.height / 2)
+})
+$('#brush-size').addEventListener('input', (event) => {
+  $('#brush-size-value').textContent = `${event.target.value} px`
+  updateEditorBrushCursor()
+})
+$('#brush-hardness').addEventListener('input', (event) => {
+  $('#brush-hardness-value').textContent = `${event.target.value}%`
+  updateEditorBrushCursor()
+})
+$$("input[name='paint-mode']").forEach((input) => input.addEventListener('change', () => updateEditorBrushCursor()))
+$('#original-opacity').addEventListener('input', (event) => {
+  $('#original-opacity-value').textContent = `${event.target.value}%`
+  requestEditorRender()
+})
+$('#asset-opacity').addEventListener('input', (event) => {
+  $('#asset-opacity-value').textContent = `${event.target.value}%`
+  requestEditorRender()
+})
+$('#other-opacity').addEventListener('input', (event) => {
+  $('#other-opacity-value').textContent = `${event.target.value}%`
+  requestEditorRender()
+})
+$('#editor-backdrop').addEventListener('change', (event) => {
+  const viewport = $('#editor-viewport')
+  viewport.dataset.backdrop = event.target.value
+  $('#custom-backdrop-field').hidden = event.target.value !== 'custom'
+  viewport.style.backgroundColor = event.target.value === 'custom' ? $('#custom-backdrop').value : ''
+  viewport.style.backgroundImage = event.target.value === 'custom' ? 'none' : ''
+})
+$('#custom-backdrop').addEventListener('input', (event) => { $('#editor-viewport').style.backgroundColor = event.target.value })
+$('#editor-viewport').addEventListener('wheel', (event) => {
+  if (!editorState.base) return
+  event.preventDefault()
+  let delta = event.deltaY
+  if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) delta *= 16
+  else if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) delta *= $('#editor-viewport').clientHeight
+  const currentZoom = Number($('#editor-zoom').value)
+  const factor = Math.exp(-delta * 0.0018)
+  let nextZoom = Math.round(currentZoom * factor)
+  if (nextZoom === currentZoom && delta !== 0) nextZoom += delta < 0 ? 1 : -1
+  zoomEditorAt(nextZoom, event.clientX, event.clientY)
+}, { passive: false })
+$('#editor-viewport').addEventListener('scroll', () => updateEditorBrushCursor())
+$('#save-editor').addEventListener('click', saveLayerEditor)
+$('#close-editor').addEventListener('click', closeLayerEditor)
+$('#cancel-editor').addEventListener('click', closeLayerEditor)
+$('#layer-editor').addEventListener('cancel', (event) => {
+  event.preventDefault()
+  closeLayerEditor()
+})
+window.addEventListener('keydown', (event) => {
+  if (!$('#layer-editor').open) return
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+    event.preventDefault()
+    restoreEditorSnapshot(event.shiftKey ? editorState.redo : editorState.undo, event.shiftKey ? editorState.undo : editorState.redo)
+  } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') {
+    event.preventDefault()
+    restoreEditorSnapshot(editorState.redo, editorState.undo)
+  } else if (event.key === '[' || event.key === ']') {
+    const brush = $('#brush-size')
+    brush.value = String(Math.max(2, Math.min(240, Number(brush.value) + (event.key === ']' ? 4 : -4))))
+    $('#brush-size-value').textContent = `${brush.value} px`
+    updateEditorBrushCursor()
+  }
 })
 
 function stopPuppetPreview() {

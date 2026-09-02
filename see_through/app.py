@@ -13,10 +13,10 @@ import uvicorn
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageChops, UnidentifiedImageError
 
 from see_through import __version__
-from see_through.revisions import validate_replacement_parts
+from see_through.revisions import layer_manifest, validate_edit_part, validate_replacement_parts
 from see_through.runtime import (
     JOBS_ROOT,
     accept_revision,
@@ -37,6 +37,7 @@ from see_through.runtime import (
 
 
 MAX_UPLOAD_BYTES = int(os.getenv("SEE_THROUGH_MAX_UPLOAD_BYTES", str(30 * 1024 * 1024)))
+MAX_EDIT_MASK_BYTES = int(os.getenv("SEE_THROUGH_MAX_EDIT_MASK_BYTES", str(16 * 1024 * 1024)))
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 BRAND_ROOT = Path(__file__).resolve().parent / "brand"
 
@@ -139,6 +140,12 @@ def decomposition_status(job_id: str, include_logs: bool = True) -> dict[str, ob
     job = get_job(job_id)
     if job is None:
         raise HTTPException(404, "job not found")
+    if job.status == "completed" and (
+        not job.parts
+        or any("base_url" not in part or "edit_mask_url" not in part for part in job.parts)
+    ):
+        job.parts = layer_manifest(output_root(job.id) / "input", job.id)
+        persist_job(job)
     return job.public(include_logs=include_logs)
 
 
@@ -197,6 +204,85 @@ def create_decomposition_revision(
         raise HTTPException(500, "could not stage the revision") from exc
     background_tasks.add_task(run_job, revision.id)
     return revision.public()
+
+
+@app.post(
+    "/v1/layer-decompositions/{job_id}/edits",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_layer_detail_edit(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    part: str = Form(...),
+    mask: UploadFile = File(...),
+) -> dict[str, object]:
+    parent = get_job(job_id)
+    if parent is None:
+        raise HTTPException(404, "parent job not found")
+    if parent.status != "completed":
+        raise HTTPException(409, f"parent job is {parent.status}")
+    parent_layers = output_root(parent.id) / "input"
+    if not input_path(parent.id).is_file() or not parent_layers.is_dir():
+        raise HTTPException(409, "parent job does not contain editable inference layers")
+    try:
+        edit_part = validate_edit_part(part)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    layer_path = parent_layers / f"{edit_part}.png"
+    if not layer_path.is_file():
+        raise HTTPException(409, f"parent job does not contain the {edit_part} layer")
+
+    content = await mask.read(MAX_EDIT_MASK_BYTES + 1)
+    if len(content) > MAX_EDIT_MASK_BYTES:
+        raise HTTPException(413, "edit mask exceeds the 16 MiB upload limit")
+    try:
+        with Image.open(layer_path) as layer:
+            expected_size = layer.size
+        with Image.open(BytesIO(content)) as uploaded_mask:
+            if uploaded_mask.size != expected_size:
+                raise HTTPException(
+                    422,
+                    f"edit mask dimensions must be {expected_size[0]}x{expected_size[1]}",
+                )
+            uploaded_mask.load()
+            if "A" in uploaded_mask.getbands():
+                rgba_mask = uploaded_mask.convert("RGBA")
+                normalized_mask = ImageChops.multiply(
+                    rgba_mask.convert("L"),
+                    rgba_mask.getchannel("A"),
+                )
+            else:
+                normalized_mask = uploaded_mask.convert("L")
+    except HTTPException:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise HTTPException(422, "uploaded edit mask is not a supported image") from exc
+
+    settings = dict(parent.settings)
+    settings["edit_part"] = edit_part
+    try:
+        edit = create_job(
+            settings,
+            kind="edit",
+            parent_job_id=parent.id,
+            root_job_id=parent.root_job_id or parent.id,
+            replaced_parts=[edit_part],
+        )
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+    try:
+        root = job_root(edit.id)
+        root.mkdir(parents=True, exist_ok=False)
+        output_root(edit.id).mkdir(parents=True, exist_ok=True)
+        shutil.copy2(input_path(parent.id), input_path(edit.id))
+        normalized_mask.save(root / "edit-mask.png", format="PNG")
+        persist_job(edit)
+    except (OSError, ValueError) as exc:
+        discard_queued_job(edit.id)
+        raise HTTPException(500, "could not stage the detail edit") from exc
+    background_tasks.add_task(run_job, edit.id)
+    return edit.public()
 
 
 @app.get("/v1/layer-decompositions/{job_id}/revisions")

@@ -119,6 +119,32 @@ class RevisionMetadataTests(unittest.TestCase):
         self.assertEqual(first.revision_number, 1)
         self.assertEqual(second.revision_number, 2)
 
+    def test_detail_edits_share_the_revision_number_sequence(self):
+        settings = {"seed": 1}
+        parent = runtime.create_job(settings)
+        parent.status = "completed"
+        with runtime._state_lock:
+            runtime._active_job_id = None
+        edit = runtime.create_job(
+            {**settings, "edit_part": "face"},
+            kind="edit",
+            parent_job_id=parent.id,
+            root_job_id=parent.id,
+            replaced_parts=["face"],
+        )
+        edit.status = "completed"
+        with runtime._state_lock:
+            runtime._active_job_id = None
+        revision = runtime.create_job(
+            {"seed": 2},
+            kind="revision",
+            parent_job_id=edit.id,
+            root_job_id=parent.id,
+        )
+
+        self.assertEqual(edit.revision_number, 1)
+        self.assertEqual(revision.revision_number, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
