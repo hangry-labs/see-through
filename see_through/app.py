@@ -43,7 +43,7 @@ BRAND_ROOT = Path(__file__).resolve().parent / "brand"
 
 app = FastAPI(
     title="See-through API",
-    description="Local anime-character layer decomposition and PSD generation.",
+    description="Local anime-character layer decomposition, non-destructive refinement, detail recovery, and PSD generation.",
     version=__version__,
 )
 app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
@@ -216,6 +216,7 @@ async def create_layer_detail_edit(
     part: str = Form(...),
     mask: UploadFile = File(...),
 ) -> dict[str, object]:
+    """Create a CPU-only child revision by blending source pixels through a full-canvas mask."""
     parent = get_job(job_id)
     if parent is None:
         raise HTTPException(404, "parent job not found")

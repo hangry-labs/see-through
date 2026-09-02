@@ -14,6 +14,9 @@ This Docker image includes:
 - An animated 2.5D layer preview
 - Press-and-hold original/2.5D comparison
 - Individual generated assets
+- Selective regeneration of incorrect or missing layers
+- A full-resolution brush editor for restoring source detail
+- Non-destructive revision history
 - Layered PSD download
 - A local HTTP API
 - All required model files in the standard image
@@ -84,9 +87,11 @@ http://localhost:8000
 3. Select **Generate layered PSD**.
 4. Wait while the application generates layers and estimates their depth.
 5. Inspect the animated preview and individual assets. Press and hold **Hold for original** to compare the source against the generated 2.5D result, then release it to return to motion.
-6. Select **Download layered PSD**.
+6. Download the layered PSD, selectively regenerate incorrect layers, or use **Edit details** to restore fine source pixels before export.
 
 Generation can be stopped safely with **Stop generation** while a job is running.
+
+Move the pointer over the 2.5D preview to inspect layer separation, change motion strength, or pause it. The preview combines estimated depth with semantic safeguards so connected clothing and body layers remain sensible—for example, neck stays in front of topwear and neckwear stays in front of neck.
 
 ## Fix an Incorrect or Missing Layer
 
@@ -100,6 +105,31 @@ You do not need to discard a mostly good result when only a few pieces are wrong
 6. Select **Keep revision** if it is better, or **Try another seed** to make another attempt.
 
 Only the selected image layers are taken from the new attempt. All other image layers come from the accepted parent result. The revision timeline lets you return to earlier results, and unsuccessful or canceled attempts do not overwrite them.
+
+## Restore Fine Details from the Original
+
+Generated layers can lose small visible details such as thin hair tips, eyelashes, jewellery, clothing trim, or sharp line work. The detail editor lets you recover those pixels from the aligned source without generating the whole image again.
+
+1. Open an accepted result and select **Edit details** on the semantic layer you want to improve.
+2. Choose **Restore original** and paint over details that should come from the source image.
+3. Choose **Use generated** to erase restoration from an area without damaging the generated base layer.
+4. Adjust brush size and hardness. The outer cursor ring shows the complete affected area; the inner ring shows the solid core. Low hardness creates a lighter feathered blend.
+5. Scroll the mouse wheel over the image to zoom toward the pointer. Zoom ranges from 10% to 1200%, with a slider and **Fit canvas** available as well.
+6. Select **Save detail revision**, inspect the rebuilt result, and choose **Keep revision** or **Return to parent**.
+
+The editor provides three independent visibility controls:
+
+- **Original reference** reveals the source beneath the working composition.
+- **Selected layer** changes the opacity of the asset being edited.
+- **Other layers** reveals the rest of the static composition.
+
+The backdrop can be checkerboard, white, black, or a custom colour. To inspect the exact edited asset, set original and other-layer opacity to 0%, keep the selected layer at 100%, and choose a contrasting backdrop. This makes accidentally restored pixels easy to find.
+
+Undo and redo are available in the toolbar. `Ctrl+Z`, `Ctrl+Shift+Z`, and `Ctrl+Y` work from the keyboard, while `[` and `]` change brush size.
+
+Saving an edit stores the painted mask as a non-destructive child revision and rebuilds the layered PSD on the CPU. LayerDiff3D and Marigold do not run again. Kept edits can be reopened with **Continue editing**, and their masks remain adjustable. If that same semantic layer is later regenerated, its previous detail mask is intentionally reset; edits on other layers remain intact.
+
+The editor copies pixels that are already visible in the original image. It does not generate parts hidden behind hair, clothing, or accessories. Paint one semantic layer at a time and use the isolated view to avoid copying pixels belonging to neighbouring objects.
 
 ## Recommended Settings
 
@@ -222,6 +252,14 @@ If that fails, update the NVIDIA driver and verify Docker's NVIDIA GPU setup bef
 
 The two model stages run one after another and can take several minutes. Safe mode reduces memory use by moving model blocks between system memory and GPU memory, which makes generation slower.
 
+### Edit details is not shown
+
+Detail editing is available on completed, accepted results. If you are reviewing a candidate revision, choose **Keep revision** first or return to its accepted parent.
+
+### Soft brush strokes still restore too much
+
+Start with hardness near 0% and make one pass. Repeated passes intentionally accumulate restoration. Use **Use generated** with a soft brush to reduce an area, or undo and repaint it.
+
 ## Local API
 
 The UI and API run together on port `8000`.
@@ -230,6 +268,13 @@ The UI and API run together on port `8000`.
 - Health and GPU status: `GET /health/ready`
 - Create a generation: `POST /v1/layer-decompositions`
 - Read or stop a generation: `GET` or `DELETE /v1/layer-decompositions/{job_id}`
+- Regenerate selected layers: `POST /v1/layer-decompositions/{job_id}/revisions`
+- Apply one full-canvas source-detail mask: `POST /v1/layer-decompositions/{job_id}/edits`
+- Read the complete revision timeline: `GET /v1/layer-decompositions/{job_id}/revisions`
+- Keep a completed candidate: `POST /v1/layer-decompositions/{job_id}/accept`
+- Download a completed PSD: `GET /v1/layer-decompositions/{job_id}/download`
+
+The detail-edit request uses multipart form data with a canonical `part` name and a mask image matching the full dimensions of that layer. Black retains generated pixels, white restores source pixels, and grey values blend between them. The endpoint returns a queued revision job and does not rerun the generation models.
 
 ## Models
 
@@ -243,7 +288,7 @@ SAM Body Parsing is upstream research and annotation tooling. It is not used by 
 
 ## Privacy and Responsible Use
 
-Inputs and generated files remain in the configured local workspace. The application has no built-in login screen, so do not expose port `8000` directly to an untrusted network.
+Inputs, generated files, revision history, editor masks, and retained generated base layers remain in the configured local workspace. The application has no built-in login screen, so do not expose port `8000` directly to an untrusted network.
 
 Only process images you have permission to use. Generated layers can contain segmentation, inpainting, ordering, or reconstruction mistakes and should be reviewed before production use.
 

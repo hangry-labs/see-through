@@ -53,7 +53,7 @@
           <div class="pipeline-summary" aria-label="Generation model pipeline">
             <span>MODEL PIPELINE</span>
             <strong><i class="icon-layers-3"></i> LayerDiff 3D <b>→</b> Marigold Depth</strong>
-            <small>Both models run automatically for every PSD.</small>
+            <small>Both models run for generation and selective regeneration. Detail edits rebuild the PSD on the CPU.</small>
           </div>
 
           <label class="field">
@@ -198,7 +198,7 @@
     <section class="tab-panel simple-panel" data-panel="api" hidden>
       <p class="eyebrow">HTTP API</p>
       <h2>Build local image workflows.</h2>
-      <p>The first API surface accepts an image, queues one GPU job, exposes progress, and serves the resulting PSD and preview assets.</p>
+      <p>The API creates decompositions, selectively regenerates semantic layers, applies full-canvas source-detail masks, preserves immutable revision history, and serves the resulting PSD and preview assets.</p>
       <div class="endpoint-list">
         <code><b>POST</b> /v1/layer-decompositions</code>
         <code><b>GET</b> /v1/layer-decompositions/{job_id}</code>
