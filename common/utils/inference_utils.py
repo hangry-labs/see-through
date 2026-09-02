@@ -9,6 +9,7 @@ from modules.marigold import MarigoldDepthPipeline
 from utils.cv import center_square_pad_resize, crop_head_region, img_alpha_blending, smart_resize, validate_resolution
 from utils.torch_utils import seed_everything
 from utils.io_utils import json2dict, dict2json, load_parts, save_tmp_img, load_part, save_psd
+from utils.layer_order import apply_semantic_depth_constraints
 from utils.torchcv import cluster_inpaint_part
 
 from psd_tools import PSDImage
@@ -524,6 +525,8 @@ def further_extr(srcd: str, rotate=True, save_to_psd=False, tblr_split=True):
         for t in ['earr', 'earl', 'ears']:
             if t in tag2pinfo:
                 tag2pinfo[t]['depth_median'] = tag2pinfo['face']['depth_median'] + 0.001
+
+    apply_semantic_depth_constraints(tag2pinfo)
 
     # if 'hairb' in tag2pinfo:
     #     tag2pinfo['hairb']['depth_median'] = 1.

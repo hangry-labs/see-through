@@ -12,7 +12,7 @@ const state = {
 const previewState = {
   frame: null, running: true, hovering: false,
   pointerX: 0, pointerY: 0, currentX: 0, currentY: 0,
-  layers: [], startedAt: 0,
+  layers: [], startedAt: 0, comparing: false,
 }
 
 function setStatus(message, tone = 'neutral') {
@@ -509,8 +509,32 @@ function stopPuppetPreview() {
   if (previewState.frame) cancelAnimationFrame(previewState.frame)
   previewState.frame = null
   previewState.layers = []
+  setPreviewComparison(false)
   $('#puppet-rig').replaceChildren()
+  const original = $('#puppet-original')
+  original.onload = null
+  original.onerror = null
+  original.removeAttribute('src')
+  original.hidden = true
+  $('#preview-compare').hidden = true
   $('#puppet-preview').hidden = true
+}
+
+function previewDepths(parts) {
+  const depths = new Map(Object.entries(parts).map(([name, part]) => [
+    name,
+    Number.isFinite(part.depth_median) ? part.depth_median : 0.5,
+  ]))
+  const placeInFront = (foreground, background) => {
+    if (!depths.has(foreground) || !depths.has(background)) return
+    depths.set(foreground, Math.min(depths.get(foreground), depths.get(background) - 0.002))
+  }
+
+  // Depth estimation is visual rather than semantic. Keep connected body parts
+  // together during parallax even when their median depth values are nearly tied.
+  placeInFront('neck', 'topwear')
+  placeInFront('neckwear', 'neck')
+  return depths
 }
 
 async function renderPuppetPreview(job) {
@@ -527,11 +551,24 @@ async function renderPuppetPreview(job) {
     .map((name) => metadata.parts[name]?.depth_median)
     .filter((depth) => Number.isFinite(depth))
   const eyeAnchor = eyeDepths.length ? Math.min(...eyeDepths) : null
+  const semanticDepths = previewDepths(metadata.parts)
 
   const rig = $('#puppet-rig')
   const viewport = $('#puppet-viewport')
   const [frameWidth, frameHeight] = metadata.frame_size || [1, 1]
   viewport.style.aspectRatio = `${frameWidth} / ${frameHeight}`
+
+  const originalAsset = job.assets.find((asset) => asset.kind === 'png' && asset.name === 'src_img.png')
+  if (originalAsset) {
+    const original = $('#puppet-original')
+    original.onload = () => { $('#preview-compare').hidden = false }
+    original.onerror = () => {
+      original.hidden = true
+      $('#preview-compare').hidden = true
+    }
+    original.src = originalAsset.url
+    original.hidden = false
+  }
 
   for (const [name, part] of parts) {
     const asset = job.assets.find((item) => item.kind === 'png' && item.name === `${name}.png` && !item.name.endsWith('_depth.png'))
@@ -541,7 +578,7 @@ async function renderPuppetPreview(job) {
     image.src = asset.url
     image.alt = ''
     image.title = name
-    const rawDepth = Number.isFinite(part.depth_median) ? part.depth_median : 0.5
+    const rawDepth = semanticDepths.get(name)
     const eyeIndex = eyeStack.indexOf(name)
     const depth = eyeIndex >= 0 && eyeAnchor !== null
       ? eyeAnchor + (eyeStack.length - 1 - eyeIndex) * 0.002
@@ -606,6 +643,32 @@ function setPreviewToggleLabel() {
     ? '<i class="icon-pause"></i> Pause motion'
     : '<i class="icon-play"></i> Play motion'
 }
+
+const previewCompare = $('#preview-compare')
+
+function setPreviewComparison(comparing) {
+  previewState.comparing = comparing
+  $('#puppet-viewport').dataset.comparing = String(comparing)
+  previewCompare.setAttribute('aria-pressed', String(comparing))
+  $('span', previewCompare).textContent = comparing ? 'Showing original' : 'Hold for original'
+}
+
+previewCompare.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0 || previewCompare.hidden) return
+  previewCompare.setPointerCapture(event.pointerId)
+  setPreviewComparison(true)
+})
+previewCompare.addEventListener('pointerup', () => setPreviewComparison(false))
+previewCompare.addEventListener('pointercancel', () => setPreviewComparison(false))
+previewCompare.addEventListener('lostpointercapture', () => setPreviewComparison(false))
+previewCompare.addEventListener('keydown', (event) => {
+  if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) setPreviewComparison(true)
+})
+previewCompare.addEventListener('keyup', (event) => {
+  if (event.key === ' ' || event.key === 'Enter') setPreviewComparison(false)
+})
+previewCompare.addEventListener('blur', () => setPreviewComparison(false))
+window.addEventListener('blur', () => setPreviewComparison(false))
 
 async function refreshRuntime() {
   const badge = $('#runtime-badge')

@@ -156,11 +156,13 @@
                 <div><p class="eyebrow">2.5D PREVIEW</p><h3>Layer motion</h3></div>
                 <div class="preview-actions">
                   <span id="preview-layer-count"></span>
+                  <button id="preview-compare" class="text-button compare-button" type="button" aria-pressed="false" title="Hold to show the original image" hidden><i class="icon-images"></i> <span>Hold for original</span></button>
                   <button id="preview-toggle" class="text-button" type="button" aria-pressed="true"><i class="icon-pause"></i> Pause motion</button>
                 </div>
               </div>
               <div id="puppet-viewport" class="puppet-viewport" aria-label="Animated layered character preview">
                 <div id="puppet-rig" class="puppet-rig"></div>
+                <img id="puppet-original" class="puppet-original" alt="Original image for comparison" hidden>
                 <span class="preview-hint">Move your pointer to look around</span>
               </div>
               <label class="motion-control" for="motion-intensity">

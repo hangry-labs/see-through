@@ -12,6 +12,7 @@ This Docker image includes:
 - Drag-and-drop image upload
 - Automatic character layer generation
 - An animated 2.5D layer preview
+- Press-and-hold original/2.5D comparison
 - Individual generated assets
 - Layered PSD download
 - A local HTTP API
@@ -82,7 +83,7 @@ http://localhost:8000
 2. Keep the default settings for your first test.
 3. Select **Generate layered PSD**.
 4. Wait while the application generates layers and estimates their depth.
-5. Inspect the animated preview and individual assets.
+5. Inspect the animated preview and individual assets. Press and hold **Hold for original** to compare the source against the generated 2.5D result, then release it to return to motion.
 6. Select **Download layered PSD**.
 
 Generation can be stopped safely with **Stop generation** while a job is running.
@@ -95,7 +96,7 @@ You do not need to discard a mostly good result when only a few pieces are wrong
 2. Leave **Revision seed** empty to try a fresh random result.
 3. Select **Regenerate selected**.
 4. Wait while See-through generates a candidate and rebuilds its depth and PSD.
-5. Inspect the complete animated preview and highlighted replacement cards.
+5. Inspect the complete animated preview and highlighted replacement cards. Press and release **Hold for original** as often as needed to spot changed details.
 6. Select **Keep revision** if it is better, or **Try another seed** to make another attempt.
 
 Only the selected image layers are taken from the new attempt. All other image layers come from the accepted parent result. The revision timeline lets you return to earlier results, and unsuccessful or canceled attempts do not overwrite them.
