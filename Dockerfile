@@ -40,7 +40,7 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 COPY common /app/common
 COPY inference /app/inference
 COPY see_through /app/see_through
-COPY LICENSE README.md /app/
+COPY LICENSE README.md VERSION /app/
 
 RUN python -m pip install -e /app/common --no-deps \
     && mkdir -p /app/workspace /app/.cache/huggingface

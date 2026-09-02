@@ -14,6 +14,9 @@ vars:
   TEST_INFERENCE_STEPS: '30'
   TEST_GROUP_OFFLOAD: 'false'
   OFFLINE_TEST_INFERENCE_STEPS: '1'
+  DRY_RUN: '0'
+  NEXT_VERSION: ''
+  SKIP_VALIDATION: '0'
 
 tasks:
   list:
@@ -28,7 +31,35 @@ tasks:
       - cmd /c docker compose version
       - cmd /c nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv,noheader
       - cmd /c task --version
+      - cmd /c node --version
       - cmd /c git status --short
+
+  release:
+    desc: Validate, tag, and push the current release, then prepare the next snapshot
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -DryRun "{{.DRY_RUN}}" -NextVersion "{{.NEXT_VERSION}}" -SkipValidation "{{.SKIP_VALIDATION}}" -TestImage "{{.TINY_IMAGE}}"
+
+  compile:
+    desc: Compile Python sources and validate browser JavaScript syntax
+    cmds:
+      - python -m compileall -q see_through common inference tests scripts
+      - node --check see_through/static/app.js
+
+  test:
+    desc: Run the unit suite inside the local tiny runtime image
+    cmds:
+      - cmd /c docker image inspect {{.TINY_IMAGE}} >nul
+      - cmd /c docker run --rm -v "{{.TASKFILE_DIR}}\VERSION:/app/VERSION:ro" -v "{{.TASKFILE_DIR}}\see_through:/app/see_through:ro" -v "{{.TASKFILE_DIR}}\common:/app/common:ro" -v "{{.TASKFILE_DIR}}\inference:/app/inference:ro" -v "{{.TASKFILE_DIR}}\tests:/app/tests:ro" {{.TINY_IMAGE}} python -m unittest discover -s tests -v
+
+  validate-release:
+    desc: Run the non-publishing release validation suite
+    cmds:
+      - python scripts/check_version.py
+      - task: compile
+      - task: test
+      - cmd /c docker build --check .
+      - cmd /c git diff --check
+      - cmd /c git diff --cached --check
 
   prepare:
     internal: true
@@ -97,7 +128,7 @@ tasks:
       - task: prepare
       - cmd: cmd /c docker rm -f {{.CONTAINER}} >nul 2>&1
         ignore_error: true
-      - cmd /c docker run -d --name {{.CONTAINER}} --restart unless-stopped -p {{.PORT}}:8000 --gpus all -e CUDA_VISIBLE_DEVICES={{.GPU_DEVICE}} -e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0 -v {{.HF_CACHE_VOLUME}}:/app/.cache/huggingface -v "{{.WORKSPACE}}:/app/workspace" -v "{{.TASKFILE_DIR}}\see_through:/app/see_through" -v "{{.TASKFILE_DIR}}\common:/app/common" -v "{{.TASKFILE_DIR}}\inference:/app/inference" {{.TINY_IMAGE}}
+      - cmd /c docker run -d --name {{.CONTAINER}} --restart unless-stopped -p {{.PORT}}:8000 --gpus all -e CUDA_VISIBLE_DEVICES={{.GPU_DEVICE}} -e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0 -v {{.HF_CACHE_VOLUME}}:/app/.cache/huggingface -v "{{.WORKSPACE}}:/app/workspace" -v "{{.TASKFILE_DIR}}\VERSION:/app/VERSION:ro" -v "{{.TASKFILE_DIR}}\see_through:/app/see_through" -v "{{.TASKFILE_DIR}}\common:/app/common" -v "{{.TASKFILE_DIR}}\inference:/app/inference" {{.TINY_IMAGE}}
       - cmd /c docker ps --filter "name={{.CONTAINER}}"
 
   compose-up:

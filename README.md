@@ -157,6 +157,40 @@ Dependencies are declared in `requirements.in` and compiled into the Docker-cons
 
 Local test images belong in `test_assets/`, which is ignored by Git.
 
+### Release workflow
+
+Releases run from a clean `main` branch synchronized with `origin/main`. Preview the release first, then run it without `DRY_RUN` only when the reported version, tag, next snapshot, and validation results are correct:
+
+```bash
+task release DRY_RUN=1
+task release
+```
+
+The root `VERSION` file is the single source of truth used by the runtime, API, and browser UI. The guarded release task validates that metadata and its runtime exposure, compiles the Python sources, checks the browser JavaScript, runs the unit suite inside the local `see-through:tiny` image, and validates the Dockerfile. It does not build or pull images locally.
+
+The real release converts the current snapshot to a stable version, creates a release metadata commit and annotated `vX.Y.Z` tag, prepares the next minor snapshot commit, and atomically pushes `main` and the tag. GitHub Actions is solely responsible for publishing the full `vX.Y.Z`/`latest` and tiny `vX.Y.Z_tiny`/`latest_tiny` images. Use `NEXT_VERSION=0.1.1-snapshot` to override the default next-minor snapshot, or `SKIP_VALIDATION=1` only when the same release commit has already passed the complete validation suite.
+
+Run the validation gate without invoking any release logic with:
+
+```bash
+task validate-release
+```
+
+## Version history
+
+### v0.1.0 (in development)
+
+- Packaged the upstream See-through inference pipeline as full offline and cache-backed tiny Docker images with pinned model revisions.
+- Added a combined FastAPI browser application and HTTP API on port 8000 with health, model-status, progress, cancellation, asset, and PSD-download routes.
+- Added drag-and-drop image input, framing, quality, seed, inference-step, and 16 GB VRAM-safe group-offload controls.
+- Added an interactive 2.5D layer preview with pointer motion, adjustable strength, pause, and press-and-hold original-image comparison.
+- Added semantic depth safeguards so neck, topwear, and neckwear remain in a sensible visual order.
+- Added immutable revision history and selective regeneration of incorrect or missing semantic layers while preserving accepted parent results.
+- Added a full-resolution source-detail editor with restore/erase painting, soft brush falloff, brush-footprint outlines, undo/redo, pointer-centered zoom up to 1200%, configurable backdrops, and independent source, selected-layer, and composition opacity.
+- Added CPU-only detail revisions with retained editable masks, premultiplied-alpha blending, depth assignment for restored pixels, and PSD reconstruction without another model run.
+- Added automated source checks plus full and tiny Docker publication workflows for rolling and immutable release tags.
+- Preserved local workspace privacy, upstream authorship, research citations, model attribution, and the Apache-2.0 license.
+
 ## Models and pipeline
 
 PSD generation always uses this pipeline:

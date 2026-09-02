@@ -26,17 +26,32 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate version metadata
+        run: python scripts/check_version.py
+
       - name: Compile Python sources
-        run: python -m compileall -q see_through common inference tests
+        run: python -m compileall -q see_through common inference tests scripts
+
+      - name: Validate browser JavaScript
+        run: node --check see_through/static/app.js
 
       - name: Install lightweight test dependencies
         run: >-
           python -m pip install
+          fastapi==0.136.3
+          httpx==0.28.1
           numpy==2.2.6
           Pillow==12.1.1
           opencv-python-headless==4.13.0.92
           pycocotools==2.0.11
+          python-multipart==0.0.32
           PyYAML==6.0.3
+          uvicorn==0.51.0
 
       - name: Run unit tests
         env:
