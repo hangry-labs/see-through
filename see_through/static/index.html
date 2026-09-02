@@ -133,10 +133,24 @@
 
           <section id="results" class="results" hidden>
             <div class="panel-heading results-heading">
-              <div><p class="eyebrow">RESULT</p><h2>Generated assets</h2></div>
+              <div><p class="eyebrow" id="result-eyebrow">RESULT</p><h2 id="result-title">Generated assets</h2></div>
               <a id="download-psd" class="download-button" href="#"><i class="icon-download"></i> Download PSD</a>
             </div>
-            <p class="results-copy">Review the reconstructed image and generated semantic layers before downloading the editable file.</p>
+            <p class="results-copy" id="results-copy">Review the reconstructed image and generated semantic layers before downloading the editable file.</p>
+
+            <section id="revision-review" class="revision-review" hidden>
+              <div>
+                <p class="eyebrow">CANDIDATE REVISION</p>
+                <h3 id="revision-review-title">Review regenerated layers</h3>
+                <p id="revision-review-copy"></p>
+              </div>
+              <div class="revision-review-actions">
+                <button id="keep-revision" class="download-button" type="button"><i class="icon-check"></i> Keep revision</button>
+                <button id="retry-revision" class="secondary-button" type="button"><i class="icon-refresh-cw"></i> Try another seed</button>
+                <button id="return-to-parent" class="text-button" type="button"><i class="icon-undo-2"></i> Return to parent</button>
+              </div>
+            </section>
+
             <section id="puppet-preview" class="puppet-preview" hidden>
               <div class="preview-heading">
                 <div><p class="eyebrow">2.5D PREVIEW</p><h3>Layer motion</h3></div>
@@ -154,7 +168,26 @@
                 <input id="motion-intensity" type="range" min="0" max="100" value="35">
               </label>
             </section>
+
+            <section id="refinement-panel" class="refinement-panel" hidden>
+              <div class="refinement-heading">
+                <div><p class="eyebrow">INTERACTIVE REFINEMENT</p><h3>Regenerate selected layers</h3></div>
+                <button id="clear-part-selection" class="text-button" type="button" disabled><i class="icon-x"></i> Clear</button>
+              </div>
+              <p>Select imperfect or missing layers below. See-through will generate a new candidate, retain only those layers, recalculate depth for the stitched result, and build a new PSD.</p>
+              <div class="refinement-controls">
+                <label><span>Revision seed</span><input id="revision-seed" type="number" min="0" max="2147483647" placeholder="Random"><small>Empty tries a fresh seed.</small></label>
+                <div class="selection-summary"><strong id="selected-part-count">No layers selected</strong><span id="selected-part-names">Choose one or more cards below.</span></div>
+                <button id="regenerate-selected" class="primary-button" type="button" disabled><span><i class="icon-refresh-cw"></i> Regenerate selected</span><i class="icon-arrow-right"></i></button>
+              </div>
+            </section>
+
             <div id="asset-gallery" class="asset-gallery"></div>
+
+            <section id="revision-history" class="revision-history" hidden>
+              <div class="refinement-heading"><div><p class="eyebrow">REVISION HISTORY</p><h3>Generation timeline</h3></div></div>
+              <div id="revision-list" class="revision-list"></div>
+            </section>
           </section>
         </div>
       </form>
@@ -168,6 +201,9 @@
         <code><b>POST</b> /v1/layer-decompositions</code>
         <code><b>GET</b> /v1/layer-decompositions/{job_id}</code>
         <code><b>DELETE</b> /v1/layer-decompositions/{job_id}</code>
+        <code><b>POST</b> /v1/layer-decompositions/{job_id}/revisions</code>
+        <code><b>GET</b> /v1/layer-decompositions/{job_id}/revisions</code>
+        <code><b>POST</b> /v1/layer-decompositions/{job_id}/accept</code>
         <code><b>GET</b> /v1/layer-decompositions/{job_id}/download</code>
         <code><b>GET</b> /health/ready</code>
       </div>

@@ -34,7 +34,19 @@ docker run -d \
   hangrylabs/see-through:latest
 ```
 
-Open [http://localhost:8000](http://localhost:8000), add an image, choose the generation settings, and select **Generate layers**. The result view provides the reconstructed preview, individual layers, and PSD download.
+Open [http://localhost:8000](http://localhost:8000), add an image, choose the generation settings, and select **Generate layered PSD**. The result view provides the reconstructed preview, individual layers, and PSD download.
+
+### Improve individual layers
+
+After generation, select any incorrect or empty layer cards and choose **Regenerate selected**. A fresh seed generates a candidate in an isolated revision, while every unselected layer stays byte-for-byte identical to the accepted result. See-through recalculates depth for the stitched layer set and builds a new PSD.
+
+Review the assembled candidate and then choose:
+
+- **Keep revision** to continue working from it
+- **Try another seed** to repeat the same replacements from the last accepted result
+- **Return to parent** to leave the candidate unchanged and go back
+
+The revision timeline keeps the initial result, accepted revisions, unsuccessful candidates, and canceled attempts available without overwriting their parent artifacts. Empty layers are selectable, so a missing item such as footwear can be retried directly.
 
 Useful commands:
 
@@ -80,6 +92,9 @@ The UI and API share port `8000`.
 - Create a job: `POST /v1/layer-decompositions`
 - Read a job: `GET /v1/layer-decompositions/{job_id}`
 - Stop a job: `DELETE /v1/layer-decompositions/{job_id}`
+- Regenerate selected parts: `POST /v1/layer-decompositions/{job_id}/revisions`
+- Read its revision timeline: `GET /v1/layer-decompositions/{job_id}/revisions`
+- Keep a completed candidate: `POST /v1/layer-decompositions/{job_id}/accept`
 - Download its PSD: `GET /v1/layer-decompositions/{job_id}/download`
 
 ## Local development

@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from see_through.revisions import CANONICAL_PARTS, layer_manifest
+
 
 APP_ROOT = Path(os.getenv("SEE_THROUGH_APP_ROOT", "/app"))
 WORKSPACE_ROOT = Path(os.getenv("SEE_THROUGH_WORKSPACE", "/app/workspace"))
@@ -44,6 +46,12 @@ class Job:
     id: str
     status: str
     settings: dict[str, Any]
+    kind: str = "generation"
+    parent_job_id: str | None = None
+    root_job_id: str | None = None
+    revision_number: int = 0
+    replaced_parts: list[str] = field(default_factory=list)
+    accepted_at: str | None = None
     created_at: str = field(default_factory=utc_now)
     started_at: str | None = None
     completed_at: str | None = None
@@ -53,10 +61,14 @@ class Job:
     cancel_requested: bool = False
     logs: deque[str] = field(default_factory=lambda: deque(maxlen=300))
     assets: list[dict[str, Any]] = field(default_factory=list)
+    parts: list[dict[str, Any]] = field(default_factory=list)
 
-    def public(self, include_logs: bool = True) -> dict[str, Any]:
+    def public(self, include_logs: bool = True, include_assets: bool = True) -> dict[str, Any]:
         payload = asdict(self)
         payload["logs"] = list(self.logs) if include_logs else []
+        if not include_assets:
+            payload["assets"] = []
+            payload["parts"] = []
         if self.status == "completed":
             payload["download_url"] = f"/v1/layer-decompositions/{self.id}/download"
         return payload
@@ -69,14 +81,47 @@ _active_job_id: str | None = None
 _processes: dict[str, subprocess.Popen[str]] = {}
 
 
-def create_job(settings: dict[str, Any]) -> Job:
+def create_job(
+    settings: dict[str, Any],
+    *,
+    kind: str = "generation",
+    parent_job_id: str | None = None,
+    root_job_id: str | None = None,
+    revision_number: int | None = None,
+    replaced_parts: list[str] | None = None,
+) -> Job:
     global _active_job_id
     with _state_lock:
         if _active_job_id is not None:
             active = _jobs.get(_active_job_id)
             if active and active.status in {"queued", "running"}:
                 raise RuntimeError(f"job {active.id} is already running")
-        job = Job(id=uuid4().hex, status="queued", settings=settings)
+        job_id = uuid4().hex
+        resolved_root_id = root_job_id or job_id
+        if revision_number is None:
+            revision_number = (
+                max(
+                    (
+                        item.revision_number
+                        for item in _jobs.values()
+                        if (item.root_job_id or item.id) == resolved_root_id
+                    ),
+                    default=0,
+                )
+                + 1
+                if kind == "revision"
+                else 0
+            )
+        job = Job(
+            id=job_id,
+            status="queued",
+            settings=settings,
+            kind=kind,
+            parent_job_id=parent_job_id,
+            root_job_id=resolved_root_id,
+            revision_number=revision_number,
+            replaced_parts=list(replaced_parts or []),
+        )
         _jobs[job.id] = job
         _active_job_id = job.id
         return job
@@ -85,6 +130,32 @@ def create_job(settings: dict[str, Any]) -> Job:
 def get_job(job_id: str) -> Job | None:
     with _state_lock:
         return _jobs.get(job_id)
+
+
+def revision_history(job_id: str) -> list[Job] | None:
+    """Return every job in the same immutable revision tree."""
+    with _state_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return None
+        root_id = job.root_job_id or job.id
+        related = [item for item in _jobs.values() if (item.root_job_id or item.id) == root_id]
+        return sorted(related, key=lambda item: (item.created_at, item.id))
+
+
+def accept_revision(job_id: str) -> Job | None:
+    """Mark a completed candidate as kept without modifying its generated assets."""
+    with _state_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return None
+        if job.status != "completed":
+            raise RuntimeError(f"job is {job.status}")
+        if job.accepted_at is None:
+            job.accepted_at = utc_now()
+        accepted = job
+    persist_job(accepted)
+    return accepted
 
 
 def discard_queued_job(job_id: str) -> None:
@@ -163,9 +234,9 @@ def pipeline_runtime(job: Job | None = None) -> dict[str, Any]:
     elif stage == "layer-decomposition":
         layerdiff_state = "active"
         depth_state = "pending"
-    elif stage == "depth-estimation":
+    elif stage in {"layer-stitching", "depth-estimation"}:
         layerdiff_state = "resident"
-        depth_state = "active"
+        depth_state = "active" if stage == "depth-estimation" else "pending"
     elif stage == "psd-assembly":
         layerdiff_state = "resident"
         depth_state = "resident"
@@ -239,9 +310,11 @@ def _set_stage(job: Job, line: str) -> None:
     lowered = line.lower()
     if "running layerdiff" in lowered:
         job.stage = "layer-decomposition"
+    elif "stitching selected" in lowered:
+        job.stage = "layer-stitching"
     elif "running marigold" in lowered:
         job.stage = "depth-estimation"
-    elif "psd saved" in lowered:
+    elif "building revised psd" in lowered or "psd saved" in lowered:
         job.stage = "psd-assembly"
 
 
@@ -258,14 +331,16 @@ def _collect_assets(job: Job) -> list[dict[str, Any]]:
     assets: list[dict[str, Any]] = []
     allowed = {".png", ".json", ".psd"}
     for path in sorted(root.rglob("*")):
+        relative_path = path.relative_to(root)
         if (
             not path.is_file()
             or path.suffix.lower() not in allowed
             or path == input_path(job.id)
             or path.name == "job.json"
+            or ".candidate" in relative_path.parts
         ):
             continue
-        relative = path.relative_to(root).as_posix()
+        relative = relative_path.as_posix()
         assets.append(
             {
                 "name": path.name,
@@ -289,32 +364,58 @@ def run_job(job_id: str) -> None:
         job.started_at = utc_now()
 
     settings = job.settings
-    command = [
-        sys.executable,
-        "-u",
-        str(APP_ROOT / "inference" / "scripts" / "inference_psd.py"),
-        "--srcp",
-        str(input_path(job_id)),
-        "--save_dir",
-        str(output_root(job_id)),
-        "--save_to_psd",
-        "--seed",
-        str(settings["seed"]),
-        "--resolution",
-        str(settings["resolution"]),
-        "--resolution_depth",
-        str(settings["depth_resolution"]),
-        "--inference_steps",
-        str(settings["inference_steps"]),
-        "--repo_id_layerdiff",
-        LAYERDIFF_MODEL,
-        "--repo_id_depth",
-        DEPTH_MODEL,
-    ]
+    command = [sys.executable, "-u"]
+    if job.kind == "revision":
+        if not job.parent_job_id:
+            job.status = "failed"
+            job.stage = "failed"
+            job.error = "revision is missing its parent job"
+            job.completed_at = utc_now()
+            persist_job(job)
+            with _state_lock:
+                if _active_job_id == job.id:
+                    _active_job_id = None
+            return
+        command.extend(
+            [
+                str(APP_ROOT / "inference" / "scripts" / "inference_revision.py"),
+                "--parent_dir",
+                str(output_root(job.parent_job_id) / "input"),
+            ]
+        )
+        for part in job.replaced_parts:
+            command.extend(["--replace_tag", part])
+    else:
+        command.extend(
+            [
+                str(APP_ROOT / "inference" / "scripts" / "inference_psd.py"),
+                "--save_to_psd",
+            ]
+        )
+    command.extend(
+        [
+            "--srcp",
+            str(input_path(job_id)),
+            "--save_dir",
+            str(output_root(job_id)),
+            "--seed",
+            str(settings["seed"]),
+            "--resolution",
+            str(settings["resolution"]),
+            "--resolution_depth",
+            str(settings["depth_resolution"]),
+            "--inference_steps",
+            str(settings["inference_steps"]),
+            "--repo_id_layerdiff",
+            LAYERDIFF_MODEL,
+            "--repo_id_depth",
+            DEPTH_MODEL,
+        ]
+    )
     if settings.get("group_offload"):
         command.append("--group_offload")
 
-    job.logs.append("Starting See-through inference")
+    job.logs.append("Starting See-through revision" if job.kind == "revision" else "Starting See-through inference")
     job.logs.append("Command settings: " + ", ".join(f"{key}={value}" for key, value in settings.items()))
     persist_job(job)
 
@@ -350,6 +451,7 @@ def run_job(job_id: str) -> None:
                     _set_stage(job, line)
             job.exit_code = process.wait()
         job.assets = _collect_assets(job)
+        job.parts = layer_manifest(output_root(job.id) / "input", job.id)
         psd_path = output_root(job_id) / "input.psd"
         if job.cancel_requested:
             job.status = "canceled"
@@ -363,6 +465,8 @@ def run_job(job_id: str) -> None:
         else:
             job.status = "completed"
             job.stage = "completed"
+            if job.kind == "generation":
+                job.accepted_at = utc_now()
     except Exception as exc:
         job.status = "failed"
         job.stage = "failed"
@@ -418,6 +522,12 @@ def load_jobs_from_disk() -> None:
                     id=payload["id"],
                     status=payload["status"],
                     settings=payload.get("settings", {}),
+                    kind=payload.get("kind", "generation"),
+                    parent_job_id=payload.get("parent_job_id"),
+                    root_job_id=payload.get("root_job_id", payload["id"]),
+                    revision_number=payload.get("revision_number", 0),
+                    replaced_parts=payload.get("replaced_parts", []),
+                    accepted_at=payload.get("accepted_at"),
                     created_at=payload.get("created_at", utc_now()),
                     started_at=payload.get("started_at"),
                     completed_at=payload.get("completed_at"),
@@ -426,6 +536,7 @@ def load_jobs_from_disk() -> None:
                     exit_code=payload.get("exit_code"),
                     cancel_requested=payload.get("cancel_requested", False),
                     assets=payload.get("assets", []),
+                    parts=payload.get("parts", []),
                 )
             elif (root / "output" / "input.psd").is_file():
                 timestamp = datetime.fromtimestamp(root.stat().st_mtime, UTC).isoformat()
@@ -438,6 +549,8 @@ def load_jobs_from_disk() -> None:
                     completed_at=timestamp,
                     stage="completed",
                     exit_code=0,
+                    root_job_id=root.name,
+                    accepted_at=timestamp,
                 )
             else:
                 continue
@@ -447,10 +560,29 @@ def load_jobs_from_disk() -> None:
                 job.error = "service restarted before inference completed"
                 job.completed_at = utc_now()
             job.assets = _collect_assets(job)
+            if len(job.parts) != len(CANONICAL_PARTS):
+                job.parts = layer_manifest(output_root(job.id) / "input", job.id)
+            if job.kind == "generation" and job.status == "completed" and job.accepted_at is None:
+                job.accepted_at = job.completed_at or job.created_at
             _jobs[job.id] = job
             persist_job(job)
         except (KeyError, OSError, ValueError, TypeError, json.JSONDecodeError):
             continue
+
+    roots = {job.root_job_id or job.id for job in _jobs.values()}
+    for root_id in roots:
+        revisions = sorted(
+            (
+                job
+                for job in _jobs.values()
+                if (job.root_job_id or job.id) == root_id and job.kind == "revision"
+            ),
+            key=lambda job: (job.created_at, job.id),
+        )
+        for revision_number, job in enumerate(revisions, start=1):
+            if job.revision_number != revision_number:
+                job.revision_number = revision_number
+                persist_job(job)
 
 
 load_jobs_from_disk()

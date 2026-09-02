@@ -1,7 +1,14 @@
 const $ = (selector, root = document) => root.querySelector(selector)
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)]
 
-const state = { file: null, previewUrl: null, jobId: null, pollTimer: null }
+const state = {
+  file: null,
+  previewUrl: null,
+  jobId: null,
+  pollTimer: null,
+  currentJob: null,
+  selectedParts: new Set(),
+}
 const previewState = {
   frame: null, running: true, hovering: false,
   pointerX: 0, pointerY: 0, currentX: 0, currentY: 0,
@@ -42,6 +49,7 @@ function stageLabel(stage) {
   return ({
     queued: 'Queued', starting: 'Loading models',
     'layer-decomposition': 'Generating semantic layers',
+    'layer-stitching': 'Stitching selected layers',
     'depth-estimation': 'Estimating layer depth',
     'psd-assembly': 'Building the layered PSD',
     canceling: 'Stopping generation', canceled: 'Generation canceled',
@@ -106,6 +114,10 @@ function selectFile(file) {
   $('#clear-image').hidden = false
   $('#generate-button').disabled = false
   $('#results').hidden = true
+  state.currentJob = null
+  state.selectedParts.clear()
+  stopPuppetPreview()
+  history.replaceState({}, '', location.pathname)
   setStatus('Image ready. Adjust settings and generate.', 'success')
 }
 
@@ -198,7 +210,10 @@ async function pollJob() {
     if (job.status === 'completed') {
       $('#generate-button').disabled = false
       $('#cancel-job').hidden = true
-      setStatus('Layered PSD generated successfully.', 'success')
+      setStatus(
+        job.kind === 'revision' ? 'Candidate revision ready for review.' : 'Layered PSD generated successfully.',
+        'success',
+      )
       renderResults(job)
       return
     }
@@ -207,6 +222,11 @@ async function pollJob() {
       $('#cancel-job').hidden = true
       setStatus(job.error || 'Generation failed.', 'error')
       showToast(job.error || 'Generation failed. Check the job log.')
+      if (state.currentJob) {
+        state.jobId = state.currentJob.id
+        history.replaceState({}, '', `?job=${state.currentJob.id}`)
+        renderRevisionHistory(state.currentJob).catch(() => {})
+      }
       return
     }
     if (job.status === 'canceled') {
@@ -214,6 +234,11 @@ async function pollJob() {
       $('#cancel-job').hidden = true
       $('#job-stage').textContent = stageLabel(job.stage)
       setStatus('Generation canceled. The GPU is ready for another job.')
+      if (state.currentJob) {
+        state.jobId = state.currentJob.id
+        history.replaceState({}, '', `?job=${state.currentJob.id}`)
+        renderRevisionHistory(state.currentJob).catch(() => {})
+      }
       return
     }
     state.pollTimer = setTimeout(pollJob, 1800)
@@ -225,44 +250,260 @@ async function pollJob() {
 
 function renderResults(job) {
   $('#cancel-job').hidden = true
+  state.currentJob = job
+  state.jobId = job.id
+  state.selectedParts.clear()
+  history.replaceState({}, '', `?job=${job.id}`)
   const results = $('#results')
   const gallery = $('#asset-gallery')
   gallery.replaceChildren()
   $('#download-psd').href = job.download_url
-  const images = job.assets.filter((asset) => asset.kind === 'png' && !asset.name.includes('_depth'))
-  const priority = (asset) => asset.name === 'reconstruction.png' ? 0 : asset.name === 'src_img.png' ? 1 : 2
-  images.sort((a, b) => priority(a) - priority(b) || a.name.localeCompare(b.name))
-  images.forEach((asset) => {
+  const candidate = job.kind === 'revision' && !job.accepted_at
+  $('#result-eyebrow').textContent = candidate ? 'REVISION PREVIEW' : job.revision_number ? 'KEPT REVISION' : 'RESULT'
+  $('#result-title').textContent = candidate ? 'Review candidate' : 'Generated assets'
+  $('#results-copy').textContent = candidate
+    ? 'Inspect the stitched preview and replacement layers. Keep this revision only when it improves the result.'
+    : 'Select any imperfect or missing semantic layers below to generate a non-destructive revision.'
+  $('#revision-review').hidden = !candidate
+  $('#refinement-panel').hidden = candidate
+  if (candidate) {
+    $$('.revision-review-actions button').forEach((button) => { button.disabled = false })
+    const names = job.replaced_parts.map(formatPartName)
+    $('#revision-review-title').textContent = `Revision ${job.revision_number} · seed ${job.settings.seed}`
+    $('#revision-review-copy').textContent = `Replaced ${formatNameList(names)}. The parent result remains unchanged.`
+  }
+
+  ;(job.parts || []).forEach((part) => {
     const card = document.createElement('article')
     card.className = 'asset-card'
-    const link = document.createElement('a')
-    link.href = asset.url
-    link.target = '_blank'
+    card.dataset.part = part.name
+    card.dataset.visible = String(Boolean(part.visible))
+    card.dataset.replaced = String(job.replaced_parts.includes(part.name))
+    const label = document.createElement('label')
+    label.className = 'asset-select'
+    const checkbox = document.createElement('input')
+    checkbox.type = 'checkbox'
+    checkbox.disabled = candidate
+    checkbox.setAttribute('aria-label', `Select ${part.name} for regeneration`)
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) state.selectedParts.add(part.name)
+      else state.selectedParts.delete(part.name)
+      card.classList.toggle('is-selected', checkbox.checked)
+      updateSelectionControls()
+    })
     const preview = document.createElement('div')
     preview.className = 'asset-preview'
-    const image = document.createElement('img')
-    image.loading = 'lazy'
-    image.src = asset.url
-    image.alt = asset.name
-    preview.append(image)
+    if (part.url) {
+      const image = document.createElement('img')
+      image.loading = 'lazy'
+      image.src = part.url
+      image.alt = `${part.name} layer`
+      preview.append(image)
+    }
     const caption = document.createElement('div')
     caption.className = 'asset-caption'
     const name = document.createElement('strong')
-    name.textContent = asset.name.replace('.png', '')
+    name.textContent = formatPartName(part.name)
     const size = document.createElement('span')
-    size.textContent = humanBytes(asset.size)
-    caption.append(name, size)
-    link.append(preview, caption)
-    card.append(link)
+    size.textContent = part.available ? humanBytes(part.size) : 'No generated file'
+    const visibility = document.createElement('span')
+    visibility.className = 'part-state'
+    visibility.textContent = job.replaced_parts.includes(part.name)
+      ? `replacement · ${part.visible ? part.group : 'empty'}`
+      : part.visible ? part.group : 'empty · retryable'
+    caption.append(name, size, visibility)
+    label.append(checkbox, preview, caption)
+    card.append(label)
+    if (part.url) {
+      const link = document.createElement('a')
+      link.className = 'asset-open'
+      link.href = part.url
+      link.target = '_blank'
+      link.rel = 'noreferrer'
+      link.title = `Open ${part.name} layer`
+      link.innerHTML = '<i class="icon-external-link"></i>'
+      card.append(link)
+    }
     gallery.append(card)
   })
+  updateSelectionControls()
   renderPuppetPreview(job).catch((error) => {
     console.warn('Layer preview unavailable:', error)
     $('#puppet-preview').hidden = true
   })
+  renderRevisionHistory(job).catch((error) => console.warn('Revision history unavailable:', error))
   results.hidden = false
   results.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
+
+function formatPartName(name) {
+  return name.replace(/(^|\s)\S/g, (letter) => letter.toUpperCase())
+}
+
+function formatNameList(names) {
+  if (names.length < 2) return names[0] || 'selected layers'
+  return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
+}
+
+function updateSelectionControls() {
+  const names = [...state.selectedParts].map(formatPartName)
+  const count = names.length
+  $('#selected-part-count').textContent = count ? `${count} layer${count === 1 ? '' : 's'} selected` : 'No layers selected'
+  $('#selected-part-names').textContent = count ? formatNameList(names) : 'Choose one or more cards below.'
+  $('#clear-part-selection').disabled = !count
+  $('#regenerate-selected').disabled = !count
+}
+
+async function renderRevisionHistory(job) {
+  const response = await fetch(`/v1/layer-decompositions/${job.id}/revisions`)
+  if (!response.ok) throw new Error(await responseError(response))
+  const payload = await response.json()
+  const list = $('#revision-list')
+  list.replaceChildren()
+  payload.items.forEach((item) => {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'revision-item'
+    button.classList.toggle('is-current', item.id === job.id)
+    button.disabled = item.status !== 'completed'
+    const number = document.createElement('span')
+    number.className = 'revision-number'
+    number.textContent = item.revision_number ? `R${item.revision_number}` : 'Base'
+    const copy = document.createElement('span')
+    copy.className = 'revision-item-copy'
+    const title = document.createElement('strong')
+    title.textContent = item.replaced_parts.length
+      ? formatNameList(item.replaced_parts.map(formatPartName))
+      : 'Initial decomposition'
+    const detail = document.createElement('span')
+    detail.textContent = `Seed ${item.settings.seed ?? 'unknown'} · ${stageLabel(item.stage)}`
+    copy.append(title, detail)
+    const badge = document.createElement('span')
+    badge.className = 'revision-badge'
+    badge.classList.toggle('is-kept', Boolean(item.accepted_at))
+    badge.textContent = item.accepted_at ? 'Kept' : item.status === 'completed' ? 'Candidate' : item.status
+    button.append(number, copy, badge)
+    if (item.status === 'completed') button.addEventListener('click', () => showJob(item.id))
+    list.append(button)
+  })
+  $('#revision-history').hidden = payload.items.length < 2
+}
+
+async function startRevision(parentJobId, parts) {
+  if (!parentJobId || !parts.length) return
+  clearTimeout(state.pollTimer)
+  $('#job-progress').hidden = false
+  setProgressState('active')
+  $('#job-stage').textContent = 'Preparing revision'
+  $('#job-log').textContent = ''
+  $('#cancel-job').hidden = false
+  $('#cancel-job').disabled = false
+  $('#cancel-job').innerHTML = '<i class="icon-square"></i> Stop generation'
+  $('#regenerate-selected').disabled = true
+  $$('.revision-review-actions button').forEach((button) => { button.disabled = true })
+  setStatus(`Regenerating ${parts.length} selected layer${parts.length === 1 ? '' : 's'}…`)
+  $('#job-progress').scrollIntoView({ behavior: 'smooth', block: 'start' })
+
+  try {
+    const body = new FormData()
+    parts.forEach((part) => body.append('parts', part))
+    const seed = $('#revision-seed').value.trim()
+    if (seed) body.append('seed', seed)
+    const response = await fetch(`/v1/layer-decompositions/${parentJobId}/revisions`, { method: 'POST', body })
+    if (!response.ok) throw new Error(await responseError(response))
+    const job = await response.json()
+    state.jobId = job.id
+    history.replaceState({}, '', `?job=${job.id}`)
+    $('#job-id').textContent = job.id.slice(0, 12)
+    pollJob()
+  } catch (error) {
+    setProgressState('failed')
+    $('#cancel-job').hidden = true
+    updateSelectionControls()
+    $$('.revision-review-actions button').forEach((button) => { button.disabled = false })
+    setStatus(error.message, 'error')
+    showToast(error.message)
+  }
+}
+
+async function showJob(jobId) {
+  clearTimeout(state.pollTimer)
+  try {
+    const response = await fetch(`/v1/layer-decompositions/${jobId}`)
+    if (!response.ok) throw new Error(await responseError(response))
+    const job = await response.json()
+    state.jobId = job.id
+    $('#job-id').textContent = job.id.slice(0, 12)
+    $('#job-stage').textContent = stageLabel(job.stage)
+    $('#job-log').textContent = job.logs.join('\n')
+    $('#job-progress').hidden = false
+    if (job.status === 'completed') {
+      setProgressState('completed')
+      $('#cancel-job').hidden = true
+      renderResults(job)
+      setStatus(job.accepted_at ? 'Viewing a kept result.' : 'Review this candidate revision.', 'success')
+    } else if (job.status === 'queued' || job.status === 'running') {
+      setProgressState('active')
+      $('#cancel-job').hidden = false
+      pollJob()
+    } else {
+      if (job.parent_job_id) {
+        await showJob(job.parent_job_id)
+        setProgressState(job.status)
+        $('#job-stage').textContent = stageLabel(job.stage)
+        setStatus(job.error || `Revision attempt ${job.status}. The parent result is still available.`, job.status === 'failed' ? 'error' : 'neutral')
+        return
+      }
+      setProgressState(job.status)
+      $('#cancel-job').hidden = true
+      setStatus(job.error || `Saved job is ${job.status}.`, 'error')
+      await renderRevisionHistory(job)
+    }
+  } catch (error) {
+    setStatus(`Could not load job: ${error.message}`, 'error')
+  }
+}
+
+$('#clear-part-selection').addEventListener('click', () => {
+  state.selectedParts.clear()
+  $$('#asset-gallery input[type="checkbox"]').forEach((input) => { input.checked = false })
+  $$('.asset-card').forEach((card) => card.classList.remove('is-selected'))
+  updateSelectionControls()
+})
+
+$('#regenerate-selected').addEventListener('click', () => {
+  if (!state.currentJob?.accepted_at) return
+  startRevision(state.currentJob.id, [...state.selectedParts])
+})
+
+$('#keep-revision').addEventListener('click', async () => {
+  if (!state.currentJob || state.currentJob.accepted_at) return
+  const button = $('#keep-revision')
+  button.disabled = true
+  try {
+    const response = await fetch(`/v1/layer-decompositions/${state.currentJob.id}/accept`, { method: 'POST' })
+    if (!response.ok) throw new Error(await responseError(response))
+    const job = await response.json()
+    renderResults(job)
+    setStatus('Revision kept. You can refine additional layers or download the new PSD.', 'success')
+  } catch (error) {
+    setStatus(`Could not keep revision: ${error.message}`, 'error')
+    showToast(error.message)
+  } finally {
+    button.disabled = false
+  }
+})
+
+$('#retry-revision').addEventListener('click', () => {
+  const job = state.currentJob
+  if (!job?.parent_job_id) return
+  $('#revision-seed').value = ''
+  startRevision(job.parent_job_id, job.replaced_parts)
+})
+
+$('#return-to-parent').addEventListener('click', () => {
+  if (state.currentJob?.parent_job_id) showJob(state.currentJob.parent_job_id)
+})
 
 function stopPuppetPreview() {
   if (previewState.frame) cancelAnimationFrame(previewState.frame)
@@ -390,34 +631,7 @@ async function refreshRuntime() {
 async function restoreJobFromUrl() {
   const jobId = new URLSearchParams(location.search).get('job')
   if (!/^[a-f0-9]{32}$/.test(jobId || '')) return
-  try {
-    const response = await fetch(`/v1/layer-decompositions/${jobId}`)
-    if (!response.ok) throw new Error(await responseError(response))
-    const job = await response.json()
-    state.jobId = job.id
-    $('#job-id').textContent = job.id.slice(0, 12)
-    $('#job-stage').textContent = stageLabel(job.stage)
-    $('#job-log').textContent = job.logs.join('\n')
-    if (job.status === 'completed') {
-      $('#job-progress').hidden = false
-      $('#cancel-job').hidden = true
-      setProgressState('completed')
-      setStatus('Restored completed generation.', 'success')
-      renderResults(job)
-    } else if (job.status === 'queued' || job.status === 'running') {
-      $('#job-progress').hidden = false
-      setProgressState('active')
-      $('#cancel-job').hidden = false
-      setStatus('Restored generation in progress.')
-      pollJob()
-    } else {
-      $('#cancel-job').hidden = true
-      setProgressState(job.status)
-      setStatus(job.error || `Saved job is ${job.status}.`, 'error')
-    }
-  } catch (error) {
-    setStatus(`Could not restore job: ${error.message}`, 'error')
-  }
+  await showJob(jobId)
 }
 
 $('#cancel-job').addEventListener('click', async () => {

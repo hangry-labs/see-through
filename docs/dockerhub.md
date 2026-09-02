@@ -87,6 +87,19 @@ http://localhost:8000
 
 Generation can be stopped safely with **Stop generation** while a job is running.
 
+## Fix an Incorrect or Missing Layer
+
+You do not need to discard a mostly good result when only a few pieces are wrong.
+
+1. Select the cards for the layers you want to replace. Empty cards can also be selected.
+2. Leave **Revision seed** empty to try a fresh random result.
+3. Select **Regenerate selected**.
+4. Wait while See-through generates a candidate and rebuilds its depth and PSD.
+5. Inspect the complete animated preview and highlighted replacement cards.
+6. Select **Keep revision** if it is better, or **Try another seed** to make another attempt.
+
+Only the selected image layers are taken from the new attempt. All other image layers come from the accepted parent result. The revision timeline lets you return to earlier results, and unsuccessful or canceled attempts do not overwrite them.
+
 ## Recommended Settings
 
 | Setting | Recommended starting value | What it changes |

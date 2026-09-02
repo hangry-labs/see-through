@@ -5,6 +5,7 @@ from __future__ import annotations
 import mimetypes
 import os
 import secrets
+import shutil
 from io import BytesIO
 from pathlib import Path
 
@@ -15,8 +16,10 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 
 from see_through import __version__
+from see_through.revisions import validate_replacement_parts
 from see_through.runtime import (
     JOBS_ROOT,
+    accept_revision,
     active_job,
     cancel_job,
     create_job,
@@ -28,6 +31,7 @@ from see_through.runtime import (
     output_root,
     pipeline_runtime,
     persist_job,
+    revision_history,
     run_job,
 )
 
@@ -136,6 +140,85 @@ def decomposition_status(job_id: str, include_logs: bool = True) -> dict[str, ob
     if job is None:
         raise HTTPException(404, "job not found")
     return job.public(include_logs=include_logs)
+
+
+@app.post(
+    "/v1/layer-decompositions/{job_id}/revisions",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_decomposition_revision(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    parts: list[str] = Form(...),
+    seed: int | None = Form(None, ge=0, le=2_147_483_647),
+    inference_steps: int | None = Form(None, ge=1, le=100),
+) -> dict[str, object]:
+    parent = get_job(job_id)
+    if parent is None:
+        raise HTTPException(404, "parent job not found")
+    if parent.status != "completed":
+        raise HTTPException(409, f"parent job is {parent.status}")
+    if not input_path(parent.id).is_file() or not (output_root(parent.id) / "input").is_dir():
+        raise HTTPException(409, "parent job does not contain reusable inference layers")
+    try:
+        replacement_parts = validate_replacement_parts(parts)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    required_settings = {"resolution", "depth_resolution", "inference_steps", "group_offload"}
+    if not required_settings.issubset(parent.settings):
+        raise HTTPException(409, "parent job does not contain reusable generation settings")
+    settings = {
+        "seed": seed if seed is not None else secrets.randbelow(2_147_483_648),
+        "resolution": parent.settings["resolution"],
+        "depth_resolution": parent.settings["depth_resolution"],
+        "inference_steps": inference_steps or parent.settings["inference_steps"],
+        "group_offload": parent.settings["group_offload"],
+    }
+    try:
+        revision = create_job(
+            settings,
+            kind="revision",
+            parent_job_id=parent.id,
+            root_job_id=parent.root_job_id or parent.id,
+            replaced_parts=replacement_parts,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+    try:
+        root = job_root(revision.id)
+        root.mkdir(parents=True, exist_ok=False)
+        output_root(revision.id).mkdir(parents=True, exist_ok=True)
+        shutil.copy2(input_path(parent.id), input_path(revision.id))
+        persist_job(revision)
+    except OSError as exc:
+        discard_queued_job(revision.id)
+        raise HTTPException(500, "could not stage the revision") from exc
+    background_tasks.add_task(run_job, revision.id)
+    return revision.public()
+
+
+@app.get("/v1/layer-decompositions/{job_id}/revisions")
+def decomposition_revisions(job_id: str) -> dict[str, object]:
+    jobs = revision_history(job_id)
+    if jobs is None:
+        raise HTTPException(404, "job not found")
+    return {
+        "root_job_id": jobs[0].root_job_id or jobs[0].id,
+        "items": [job.public(include_logs=False, include_assets=False) for job in jobs],
+    }
+
+
+@app.post("/v1/layer-decompositions/{job_id}/accept")
+def keep_decomposition_revision(job_id: str) -> dict[str, object]:
+    try:
+        job = accept_revision(job_id)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if job is None:
+        raise HTTPException(404, "job not found")
+    return job.public(include_logs=False)
 
 
 @app.delete("/v1/layer-decompositions/{job_id}", status_code=status.HTTP_202_ACCEPTED)

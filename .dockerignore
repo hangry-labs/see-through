@@ -4,6 +4,7 @@
 .idea
 .vscode
 AGENTS.md
+plans/
 
 # Python caches and build outputs
 __pycache__/

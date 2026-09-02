@@ -8,6 +8,7 @@ hf_credential
 # ── Workspace (datasets, model weights) ──────────────────────────
 workspace/
 test_assets/
+plans/
 
 # ── Python ────────────────────────────────────────────────────────
 __pycache__/
