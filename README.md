@@ -113,7 +113,7 @@ The baked `latest` image is recommended. The `tiny` image is mainly useful for d
 ## Settings and hardware
 
 - The default 768 px layer resolution and 512 px depth resolution are intended as a lower-memory starting point.
-- Upstream full-quality generation uses 1280 px and approximately 12–16 GB VRAM.
+- Upstream full-quality generation uses 1280 px and approximately 12â€“16 GB VRAM.
 - Lower resolutions use less memory but retain less detail.
 - Group offload lowers peak VRAM use at the cost of generation speed.
 - Selective regeneration reruns both model stages for the requested candidate layers.
@@ -188,8 +188,7 @@ task validate-release
 
 ## Version history
 
-### v0.1.0 (in development)
-
+### v0.1.0
 - Packaged the upstream See-through inference pipeline as full offline and cache-backed tiny Docker images with pinned model revisions.
 - Added a combined FastAPI browser application and HTTP API on port 8000 with health, model-status, progress, cancellation, asset, and PSD-download routes.
 - Added drag-and-drop image input, framing, quality, seed, inference-step, and 16 GB VRAM-safe group-offload controls.
@@ -224,7 +223,7 @@ Only process images you have permission to use. Generated layers can contain seg
 See-through was created by Jian Lin, Chengze Li, Haoyun Qin, Kwun Wang Chan, Yanghua Jin, Hanyuan Liu, Stephen Chun Wang Choy, and Xueting Liu.
 
 - Original project and complete research documentation: [shitagaki-lab/see-through](https://github.com/shitagaki-lab/see-through)
-- Paper: [arXiv](https://arxiv.org/abs/2602.03749) · [ACM Digital Library](https://dl.acm.org/doi/10.1145/3799902.3811209)
+- Paper: [arXiv](https://arxiv.org/abs/2602.03749) Â· [ACM Digital Library](https://dl.acm.org/doi/10.1145/3799902.3811209)
 - License: [Apache License 2.0](LICENSE)
 
 Upstream training, dataset-preparation, annotator, and desktop annotation UI documentation remains available in the [original repository](https://github.com/shitagaki-lab/see-through). Training and annotator packages are intentionally not carried by this application because they are not used for local PSD generation.

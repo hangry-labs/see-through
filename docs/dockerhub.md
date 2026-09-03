@@ -4,7 +4,7 @@
 
 # Hangry Labs See-through
 
-Turn one anime character image into separate editable layers and a layered Photoshop file—privately on your own computer.
+Turn one anime character image into separate editable layers and a layered Photoshop fileâ€”privately on your own computer.
 
 This Docker image includes:
 
@@ -91,7 +91,7 @@ http://localhost:8000
 
 Generation can be stopped safely with **Stop generation** while a job is running.
 
-Move the pointer over the 2.5D preview to inspect layer separation, change motion strength, or pause it. The preview combines estimated depth with semantic safeguards so connected clothing and body layers remain sensible—for example, neck stays in front of topwear and neckwear stays in front of neck.
+Move the pointer over the 2.5D preview to inspect layer separation, change motion strength, or pause it. The preview combines estimated depth with semantic safeguards so connected clothing and body layers remain sensibleâ€”for example, neck stays in front of topwear and neckwear stays in front of neck.
 
 ## Fix an Incorrect or Missing Layer
 
@@ -199,10 +199,10 @@ Run the command from **Start See-through** again. Your completed jobs remain in 
 
 ## Image Tags
 
-- `latest` — recommended full image with all model files included
-- `latest_tiny` — smaller application image that downloads models on first use
-- `vX.Y.Z` — versioned full release, for example `v0.1.0`
-- `vX.Y.Z_tiny` — versioned tiny release
+- `latest` â€” recommended full image with all model files included
+- `latest_tiny` â€” smaller application image that downloads models on first use
+- `vX.Y.Z` â€” versioned full release, for example `v0.1.0`
+- `vX.Y.Z_tiny` â€” versioned tiny release
 
 The full image can run inference without contacting Hugging Face after it has been pulled.
 
