@@ -38,6 +38,7 @@ from see_through.runtime import (
 
 MAX_UPLOAD_BYTES = int(os.getenv("SEE_THROUGH_MAX_UPLOAD_BYTES", str(30 * 1024 * 1024)))
 MAX_EDIT_MASK_BYTES = int(os.getenv("SEE_THROUGH_MAX_EDIT_MASK_BYTES", str(16 * 1024 * 1024)))
+SUPPORTED_DEPTH_RESOLUTIONS = {512, 640, 768, 896, 1024, 1280}
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 BRAND_ROOT = Path(__file__).resolve().parent / "brand"
 
@@ -95,7 +96,7 @@ async def create_decomposition(
 ) -> dict[str, object]:
     if resolution not in {768, 896, 1024, 1152, 1280}:
         raise HTTPException(422, "resolution must be one of 768, 896, 1024, 1152, or 1280")
-    if depth_resolution not in {512, 640, 768, 896, 1024, 1280}:
+    if depth_resolution not in SUPPORTED_DEPTH_RESOLUTIONS:
         raise HTTPException(422, "depth_resolution is not supported")
 
     content = await file.read(MAX_UPLOAD_BYTES + 1)
@@ -216,7 +217,7 @@ async def create_layer_detail_edit(
     part: str = Form(...),
     mask: UploadFile = File(...),
 ) -> dict[str, object]:
-    """Create a CPU-only child revision by blending source pixels through a full-canvas mask."""
+    """Create a detail revision, recalculating depth if pixels become newly visible."""
     parent = get_job(job_id)
     if parent is None:
         raise HTTPException(404, "parent job not found")
@@ -261,6 +262,7 @@ async def create_layer_detail_edit(
 
     settings = dict(parent.settings)
     settings["edit_part"] = edit_part
+    settings["depth_recalculated"] = False
     try:
         edit = create_job(
             settings,
@@ -284,6 +286,65 @@ async def create_layer_detail_edit(
         raise HTTPException(500, "could not stage the detail edit") from exc
     background_tasks.add_task(run_job, edit.id)
     return edit.public()
+
+
+@app.post(
+    "/v1/layer-decompositions/{job_id}/depth-revisions",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_depth_revision(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    seed: int | None = Form(None, ge=0, le=2_147_483_647),
+    depth_resolution: int | None = Form(None),
+) -> dict[str, object]:
+    """Create an immutable candidate with freshly inferred depth for every layer."""
+    parent = get_job(job_id)
+    if parent is None:
+        raise HTTPException(404, "parent job not found")
+    if parent.status != "completed":
+        raise HTTPException(409, f"parent job is {parent.status}")
+    parent_layers = output_root(parent.id) / "input"
+    if not input_path(parent.id).is_file() or not parent_layers.is_dir():
+        raise HTTPException(409, "parent job does not contain reusable inference layers")
+    if "group_offload" not in parent.settings:
+        raise HTTPException(409, "parent job does not contain reusable generation settings")
+
+    resolved_depth_resolution = (
+        parent.settings.get("depth_resolution") if depth_resolution is None else depth_resolution
+    )
+    if resolved_depth_resolution not in SUPPORTED_DEPTH_RESOLUTIONS:
+        raise HTTPException(422, "depth_resolution is not supported")
+    settings = dict(parent.settings)
+    settings.pop("edit_part", None)
+    settings.update(
+        {
+            "seed": seed if seed is not None else secrets.randbelow(2_147_483_648),
+            "depth_resolution": resolved_depth_resolution,
+            "depth_recalculated": True,
+        }
+    )
+    try:
+        revision = create_job(
+            settings,
+            kind="depth",
+            parent_job_id=parent.id,
+            root_job_id=parent.root_job_id or parent.id,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+    try:
+        root = job_root(revision.id)
+        root.mkdir(parents=True, exist_ok=False)
+        output_root(revision.id).mkdir(parents=True, exist_ok=True)
+        shutil.copy2(input_path(parent.id), input_path(revision.id))
+        persist_job(revision)
+    except OSError as exc:
+        discard_queued_job(revision.id)
+        raise HTTPException(500, "could not stage the depth revision") from exc
+    background_tasks.add_task(run_job, revision.id)
+    return revision.public()
 
 
 @app.get("/v1/layer-decompositions/{job_id}/revisions")

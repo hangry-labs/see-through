@@ -53,7 +53,7 @@
           <div class="pipeline-summary" aria-label="Generation model pipeline">
             <span>MODEL PIPELINE</span>
             <strong><i class="icon-layers-3"></i> LayerDiff 3D <b>→</b> Marigold Depth</strong>
-            <small>Both models run for generation and selective regeneration. Detail edits rebuild the PSD on the CPU.</small>
+            <small>Both models run for generation and selective regeneration. Detail edits rerun depth only when they reveal new pixels.</small>
           </div>
 
           <label class="field">
@@ -182,6 +182,15 @@
                 <div class="selection-summary"><strong id="selected-part-count">No layers selected</strong><span id="selected-part-names">Choose one or more cards below.</span></div>
                 <button id="regenerate-selected" class="primary-button" type="button" disabled><span><i class="icon-refresh-cw"></i> Regenerate selected</span><i class="icon-arrow-right"></i></button>
               </div>
+              <div class="depth-refinement">
+                <div class="depth-refinement-copy">
+                  <strong>Depth ordering</strong>
+                  <span>Recalculate every layer’s depth without regenerating its artwork.</span>
+                </div>
+                <label><span>Depth seed</span><input id="depth-revision-seed" type="number" min="0" max="2147483647" placeholder="Random"><small>Empty tries a fresh seed.</small></label>
+                <label><span>Depth resolution</span><select id="depth-revision-resolution"><option value="512">512 px</option><option value="640">640 px</option><option value="768">768 px</option><option value="896">896 px</option><option value="1024">1024 px</option><option value="1280">1280 px</option></select></label>
+                <button id="recalculate-depth" class="secondary-button" type="button"><i class="icon-layers-3"></i> Recalculate depth</button>
+              </div>
             </section>
 
             <div id="asset-gallery" class="asset-gallery"></div>
@@ -205,6 +214,7 @@
         <code><b>DELETE</b> /v1/layer-decompositions/{job_id}</code>
         <code><b>POST</b> /v1/layer-decompositions/{job_id}/revisions</code>
         <code><b>POST</b> /v1/layer-decompositions/{job_id}/edits</code>
+        <code><b>POST</b> /v1/layer-decompositions/{job_id}/depth-revisions</code>
         <code><b>GET</b> /v1/layer-decompositions/{job_id}/revisions</code>
         <code><b>POST</b> /v1/layer-decompositions/{job_id}/accept</code>
         <code><b>GET</b> /v1/layer-decompositions/{job_id}/download</code>

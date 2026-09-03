@@ -7,6 +7,7 @@ from PIL import Image
 from see_through.revisions import (
     CANONICAL_PARTS,
     layer_manifest,
+    prepare_depth_revision,
     prepare_detail_edit,
     prepare_hybrid_layers,
     validate_edit_part,
@@ -137,7 +138,7 @@ class RevisionLayerTests(unittest.TestCase):
             first_mask = Image.new("L", (4, 4), 0)
             first_mask.putpixel((2, 2), 255)
             first_mask.save(root / "first-mask.png")
-            prepare_detail_edit(parent, first, "front hair", root / "first-mask.png")
+            self.assertTrue(prepare_detail_edit(parent, first, "front hair", root / "first-mask.png"))
 
             with Image.open(first / "front hair.png") as edited:
                 self.assertEqual(edited.getpixel((2, 2)), (200, 100, 50, 255))
@@ -148,9 +149,42 @@ class RevisionLayerTests(unittest.TestCase):
             self.assertTrue((first / "edit_masks" / "front hair.png").is_file())
 
             Image.new("L", (4, 4), 0).save(root / "second-mask.png")
-            prepare_detail_edit(first, second, "front hair", root / "second-mask.png")
+            self.assertFalse(prepare_detail_edit(first, second, "front hair", root / "second-mask.png"))
             with Image.open(second / "front hair.png") as reverted:
                 self.assertEqual(reverted.getpixel((2, 2)), (10, 20, 30, 0))
+
+    def test_detail_edit_inside_existing_alpha_preserves_depth(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            parent = root / "parent"
+            parent.mkdir()
+            save_layer(parent / "src_img.png", (200, 100, 50, 255))
+            save_layer(parent / "face.png", (10, 20, 30, 255))
+            Image.new("L", (16, 16), 100).save(parent / "face_depth.png")
+            Image.new("L", (16, 16), 255).save(root / "mask.png")
+
+            requires_depth = prepare_detail_edit(parent, root / "edited", "face", root / "mask.png")
+
+            self.assertFalse(requires_depth)
+
+    def test_depth_revision_copies_editable_layers_without_optimized_outputs(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            parent = root / "parent"
+            parent.mkdir()
+            save_layer(parent / "src_img.png", (5, 5, 5, 255))
+            save_layer(parent / "face.png", (10, 20, 30, 255))
+            (parent / "edit_masks").mkdir()
+            Image.new("L", (16, 16), 100).save(parent / "edit_masks" / "face.png")
+            (parent / "optimized").mkdir()
+            save_layer(parent / "optimized" / "face.png", (1, 2, 3, 255))
+
+            revised = root / "revised"
+            prepare_depth_revision(parent, revised)
+
+            self.assertTrue((revised / "face.png").is_file())
+            self.assertTrue((revised / "edit_masks" / "face.png").is_file())
+            self.assertFalse((revised / "optimized").exists())
 
     def test_detail_edit_rejects_a_misaligned_mask(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

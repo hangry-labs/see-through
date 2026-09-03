@@ -8,6 +8,8 @@ const state = {
   pollTimer: null,
   currentJob: null,
   selectedParts: new Set(),
+  processingKind: null,
+  processingParts: new Set(),
 }
 const previewState = {
   frame: null, running: true, hovering: false,
@@ -216,10 +218,12 @@ async function pollJob() {
     log.textContent = job.logs.join('\n')
     log.scrollTop = log.scrollHeight
     if (job.status === 'completed') {
+      setProcessingState()
       $('#generate-button').disabled = false
       $('#cancel-job').hidden = true
       setStatus(
         job.kind === 'edit' ? 'Detail edit ready for review.'
+          : job.kind === 'depth' ? 'Depth revision ready for review.'
           : job.kind === 'revision' ? 'Candidate revision ready for review.'
             : 'Layered PSD generated successfully.',
         'success',
@@ -228,6 +232,7 @@ async function pollJob() {
       return
     }
     if (job.status === 'failed') {
+      setProcessingState()
       $('#generate-button').disabled = false
       $('#cancel-job').hidden = true
       setStatus(job.error || 'Generation failed.', 'error')
@@ -240,6 +245,7 @@ async function pollJob() {
       return
     }
     if (job.status === 'canceled') {
+      setProcessingState()
       $('#generate-button').disabled = false
       $('#cancel-job').hidden = true
       $('#job-stage').textContent = stageLabel(job.stage)
@@ -251,6 +257,7 @@ async function pollJob() {
       }
       return
     }
+    setProcessingState(job.kind, job.replaced_parts, stageLabel(job.stage))
     state.pollTimer = setTimeout(pollJob, 1800)
   } catch (error) {
     setStatus(`Status check failed: ${error.message}`, 'error')
@@ -259,6 +266,7 @@ async function pollJob() {
 }
 
 function renderResults(job) {
+  setProcessingState()
   $('#cancel-job').hidden = true
   state.currentJob = job
   state.jobId = job.id
@@ -272,7 +280,9 @@ function renderResults(job) {
   $('#result-eyebrow').textContent = candidate ? 'REVISION PREVIEW' : job.revision_number ? 'KEPT REVISION' : 'RESULT'
   $('#result-title').textContent = candidate ? 'Review candidate' : 'Generated assets'
   $('#results-copy').textContent = candidate
-    ? 'Inspect the stitched preview and replacement layers. Keep this revision only when it improves the result.'
+    ? job.kind === 'depth'
+      ? 'Inspect the new ordering and layer motion. The artwork is unchanged until you keep this depth revision.'
+      : 'Inspect the stitched preview and replacement layers. Keep this revision only when it improves the result.'
     : 'Select any imperfect or missing semantic layers below to generate a non-destructive revision.'
   $('#revision-review').hidden = !candidate
   $('#refinement-panel').hidden = candidate
@@ -282,10 +292,21 @@ function renderResults(job) {
     const names = job.replaced_parts.map(formatPartName)
     $('#revision-review-title').textContent = job.kind === 'edit'
       ? `Revision ${job.revision_number} · detail edit`
-      : `Revision ${job.revision_number} · seed ${job.settings.seed}`
+      : job.kind === 'depth'
+        ? `Revision ${job.revision_number} · depth seed ${job.settings.seed}`
+        : `Revision ${job.revision_number} · seed ${job.settings.seed}`
     $('#revision-review-copy').textContent = job.kind === 'edit'
-      ? `Restored original detail in ${formatNameList(names)}. The parent result remains unchanged.`
-      : `Replaced ${formatNameList(names)}. The parent result remains unchanged.`
+      ? job.settings.depth_recalculated
+        ? `Restored original detail in ${formatNameList(names)} and recalculated depth because new pixels became visible.`
+        : `Restored original detail in ${formatNameList(names)} while preserving its existing depth.`
+      : job.kind === 'depth'
+        ? `Recalculated all layer depths at ${job.settings.depth_resolution} px. The parent result remains unchanged.`
+        : `Replaced ${formatNameList(names)}. The parent result remains unchanged.`
+  }
+
+  const depthResolution = String(job.settings.depth_resolution || '')
+  if ($(`#depth-revision-resolution option[value="${depthResolution}"]`)) {
+    $('#depth-revision-resolution').value = depthResolution
   }
 
   ;(job.parts || []).forEach((part) => {
@@ -374,13 +395,42 @@ function formatNameList(names) {
   return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
 }
 
+function setProcessingState(kind = null, parts = [], label = 'Processing') {
+  state.processingKind = kind
+  state.processingParts = new Set(parts || [])
+  const busy = Boolean(kind)
+  $$('.asset-card').forEach((card) => {
+    const affected = busy && (kind === 'depth' || kind === 'generation' || state.processingParts.has(card.dataset.part))
+    card.classList.toggle('is-processing', affected)
+    card.toggleAttribute('aria-busy', affected)
+    if (affected) card.dataset.processingLabel = label
+    else delete card.dataset.processingLabel
+    $$('button,input', card).forEach((control) => {
+      if (affected) {
+        if (control.dataset.processingWasDisabled === undefined) {
+          control.dataset.processingWasDisabled = String(control.disabled)
+        }
+        control.disabled = true
+      } else if (control.dataset.processingWasDisabled !== undefined) {
+        control.disabled = control.dataset.processingWasDisabled === 'true'
+        delete control.dataset.processingWasDisabled
+      }
+    })
+  })
+  for (const selector of ['#revision-seed', '#depth-revision-seed', '#depth-revision-resolution']) {
+    $(selector).disabled = busy
+  }
+  updateSelectionControls()
+}
+
 function updateSelectionControls() {
   const names = [...state.selectedParts].map(formatPartName)
   const count = names.length
   $('#selected-part-count').textContent = count ? `${count} layer${count === 1 ? '' : 's'} selected` : 'No layers selected'
   $('#selected-part-names').textContent = count ? formatNameList(names) : 'Choose one or more cards below.'
-  $('#clear-part-selection').disabled = !count
-  $('#regenerate-selected').disabled = !count
+  $('#clear-part-selection').disabled = state.processingKind !== null || !count
+  $('#regenerate-selected').disabled = state.processingKind !== null || !count
+  $('#recalculate-depth').disabled = state.processingKind !== null || !state.currentJob?.accepted_at
 }
 
 async function renderRevisionHistory(job) {
@@ -401,13 +451,17 @@ async function renderRevisionHistory(job) {
     const copy = document.createElement('span')
     copy.className = 'revision-item-copy'
     const title = document.createElement('strong')
-    title.textContent = item.replaced_parts.length
-      ? formatNameList(item.replaced_parts.map(formatPartName))
-      : 'Initial decomposition'
+    title.textContent = item.kind === 'depth'
+      ? 'Depth ordering'
+      : item.replaced_parts.length
+        ? formatNameList(item.replaced_parts.map(formatPartName))
+        : 'Initial decomposition'
     const detail = document.createElement('span')
     detail.textContent = item.kind === 'edit'
-      ? `Manual detail edit · ${stageLabel(item.stage)}`
-      : `Seed ${item.settings.seed ?? 'unknown'} · ${stageLabel(item.stage)}`
+      ? `Manual detail edit${item.settings.depth_recalculated ? ' + depth' : ''} · ${stageLabel(item.stage)}`
+      : item.kind === 'depth'
+        ? `${item.settings.depth_resolution} px · seed ${item.settings.seed ?? 'unknown'} · ${stageLabel(item.stage)}`
+        : `Seed ${item.settings.seed ?? 'unknown'} · ${stageLabel(item.stage)}`
     copy.append(title, detail)
     const badge = document.createElement('span')
     badge.className = 'revision-badge'
@@ -431,6 +485,7 @@ async function startRevision(parentJobId, parts) {
   $('#cancel-job').disabled = false
   $('#cancel-job').innerHTML = '<i class="icon-square"></i> Stop generation'
   $('#regenerate-selected').disabled = true
+  setProcessingState('revision', parts, 'Preparing regeneration')
   $$('.revision-review-actions button').forEach((button) => { button.disabled = true })
   setStatus(`Regenerating ${parts.length} selected layer${parts.length === 1 ? '' : 's'}…`)
   $('#job-progress').scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -443,14 +498,54 @@ async function startRevision(parentJobId, parts) {
     const response = await fetch(`/v1/layer-decompositions/${parentJobId}/revisions`, { method: 'POST', body })
     if (!response.ok) throw new Error(await responseError(response))
     const job = await response.json()
+    setProcessingState(job.kind, job.replaced_parts, stageLabel(job.stage))
     state.jobId = job.id
     history.replaceState({}, '', `?job=${job.id}`)
     $('#job-id').textContent = job.id.slice(0, 12)
     pollJob()
   } catch (error) {
+    setProcessingState()
     setProgressState('failed')
     $('#cancel-job').hidden = true
     updateSelectionControls()
+    $$('.revision-review-actions button').forEach((button) => { button.disabled = false })
+    setStatus(error.message, 'error')
+    showToast(error.message)
+  }
+}
+
+async function startDepthRevision(parentJobId) {
+  if (!parentJobId) return
+  clearTimeout(state.pollTimer)
+  $('#job-progress').hidden = false
+  setProgressState('active')
+  $('#job-stage').textContent = 'Preparing depth revision'
+  $('#job-log').textContent = ''
+  $('#cancel-job').hidden = false
+  $('#cancel-job').disabled = false
+  $('#cancel-job').innerHTML = '<i class="icon-square"></i> Stop depth'
+  setProcessingState('depth', [], 'Preparing depth')
+  $$('.revision-review-actions button').forEach((button) => { button.disabled = true })
+  setStatus('Recalculating depth for every layer…')
+  $('#job-progress').scrollIntoView({ behavior: 'smooth', block: 'start' })
+
+  try {
+    const body = new FormData()
+    const seed = $('#depth-revision-seed').value.trim()
+    if (seed) body.append('seed', seed)
+    body.append('depth_resolution', $('#depth-revision-resolution').value)
+    const response = await fetch(`/v1/layer-decompositions/${parentJobId}/depth-revisions`, { method: 'POST', body })
+    if (!response.ok) throw new Error(await responseError(response))
+    const job = await response.json()
+    state.jobId = job.id
+    history.replaceState({}, '', `?job=${job.id}`)
+    $('#job-id').textContent = job.id.slice(0, 12)
+    setProcessingState(job.kind, job.replaced_parts, stageLabel(job.stage))
+    pollJob()
+  } catch (error) {
+    setProcessingState()
+    setProgressState('failed')
+    $('#cancel-job').hidden = true
     $$('.revision-review-actions button').forEach((button) => { button.disabled = false })
     setStatus(error.message, 'error')
     showToast(error.message)
@@ -507,6 +602,11 @@ $('#regenerate-selected').addEventListener('click', () => {
   startRevision(state.currentJob.id, [...state.selectedParts])
 })
 
+$('#recalculate-depth').addEventListener('click', () => {
+  if (!state.currentJob?.accepted_at) return
+  startDepthRevision(state.currentJob.id)
+})
+
 $('#keep-revision').addEventListener('click', async () => {
   if (!state.currentJob || state.currentJob.accepted_at) return
   const button = $('#keep-revision')
@@ -528,8 +628,13 @@ $('#keep-revision').addEventListener('click', async () => {
 $('#retry-revision').addEventListener('click', () => {
   const job = state.currentJob
   if (!job?.parent_job_id) return
-  $('#revision-seed').value = ''
-  startRevision(job.parent_job_id, job.replaced_parts)
+  if (job.kind === 'depth') {
+    $('#depth-revision-seed').value = ''
+    startDepthRevision(job.parent_job_id)
+  } else {
+    $('#revision-seed').value = ''
+    startRevision(job.parent_job_id, job.replaced_parts)
+  }
 })
 
 $('#return-to-parent').addEventListener('click', () => {
@@ -882,6 +987,7 @@ async function saveLayerEditor() {
   const part = editorState.part
   const button = $('#save-editor')
   button.disabled = true
+  setProcessingState('edit', [part.name], 'Saving detail edit')
   $('#editor-status').textContent = 'Saving mask and preparing the edited PSD…'
   try {
     const mask = await exportEditorMask()
@@ -902,10 +1008,12 @@ async function saveLayerEditor() {
     $('#cancel-job').hidden = false
     $('#cancel-job').disabled = false
     $('#cancel-job').innerHTML = '<i class="icon-square"></i> Stop edit'
+    setProcessingState(job.kind, job.replaced_parts, stageLabel(job.stage))
     setStatus(`Building an edited ${formatPartName(part.name)} revision…`)
     $('#job-progress').scrollIntoView({ behavior: 'smooth', block: 'start' })
     pollJob()
   } catch (error) {
+    setProcessingState()
     button.disabled = false
     $('#editor-status').textContent = error.message
     showToast(error.message)

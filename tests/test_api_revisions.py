@@ -109,8 +109,49 @@ class RevisionApiTests(unittest.TestCase):
         self.assertEqual(payload["parent_job_id"], self.parent.id)
         self.assertEqual(payload["replaced_parts"], ["front hair"])
         self.assertEqual(payload["revision_number"], 1)
+        self.assertFalse(payload["settings"]["depth_recalculated"])
         self.assertTrue((runtime.job_root(payload["id"]) / "edit-mask.png").is_file())
         self.assertTrue(runtime.input_path(payload["id"]).is_file())
+
+    def test_depth_revision_endpoint_stages_an_immutable_child(self):
+        self.parent.settings["edit_part"] = "neck"
+        with patch.object(application, "run_job"), patch.object(
+            application.secrets, "randbelow", return_value=987654
+        ):
+            response = self.client.post(
+                f"/v1/layer-decompositions/{self.parent.id}/depth-revisions",
+                data={"depth_resolution": "768"},
+            )
+
+        self.assertEqual(response.status_code, 202)
+        payload = response.json()
+        self.assertEqual(payload["kind"], "depth")
+        self.assertEqual(payload["parent_job_id"], self.parent.id)
+        self.assertEqual(payload["replaced_parts"], [])
+        self.assertEqual(payload["revision_number"], 1)
+        self.assertEqual(payload["settings"]["seed"], 987654)
+        self.assertEqual(payload["settings"]["depth_resolution"], 768)
+        self.assertTrue(payload["settings"]["depth_recalculated"])
+        self.assertNotIn("edit_part", payload["settings"])
+        self.assertTrue(runtime.input_path(payload["id"]).is_file())
+
+    def test_depth_revision_endpoint_rejects_an_unsupported_resolution(self):
+        response = self.client.post(
+            f"/v1/layer-decompositions/{self.parent.id}/depth-revisions",
+            data={"depth_resolution": "777"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("depth_resolution is not supported", response.json()["detail"])
+
+    def test_depth_revision_endpoint_rejects_zero_instead_of_falling_back(self):
+        response = self.client.post(
+            f"/v1/layer-decompositions/{self.parent.id}/depth-revisions",
+            data={"depth_resolution": "0"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("depth_resolution is not supported", response.json()["detail"])
 
     def test_detail_edit_endpoint_rejects_a_misaligned_mask(self):
         mask_file = BytesIO()

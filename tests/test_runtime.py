@@ -145,6 +145,69 @@ class RevisionMetadataTests(unittest.TestCase):
         self.assertEqual(edit.revision_number, 1)
         self.assertEqual(revision.revision_number, 2)
 
+    def test_depth_revisions_share_the_revision_number_sequence(self):
+        settings = {"seed": 1, "depth_resolution": 512, "group_offload": True}
+        parent = runtime.create_job(settings)
+        parent.status = "completed"
+        with runtime._state_lock:
+            runtime._active_job_id = None
+        depth = runtime.create_job(
+            {**settings, "seed": 2},
+            kind="depth",
+            parent_job_id=parent.id,
+            root_job_id=parent.id,
+        )
+        depth.status = "completed"
+        with runtime._state_lock:
+            runtime._active_job_id = None
+        edit = runtime.create_job(
+            {**settings, "edit_part": "face"},
+            kind="edit",
+            parent_job_id=depth.id,
+            root_job_id=parent.id,
+            replaced_parts=["face"],
+        )
+
+        self.assertEqual(depth.revision_number, 1)
+        self.assertEqual(edit.revision_number, 2)
+
+    def test_depth_revision_number_survives_disk_restore(self):
+        settings = {
+            "seed": 1,
+            "resolution": 768,
+            "depth_resolution": 512,
+            "inference_steps": 30,
+            "group_offload": True,
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with patch.object(runtime, "JOBS_ROOT", Path(temporary_directory)):
+                parent = runtime.create_job(settings)
+                parent.status = "completed"
+                parent.stage = "completed"
+                parent.accepted_at = runtime.utc_now()
+                runtime.persist_job(parent)
+                with runtime._state_lock:
+                    runtime._active_job_id = None
+                depth = runtime.create_job(
+                    {**settings, "seed": 2},
+                    kind="depth",
+                    parent_job_id=parent.id,
+                    root_job_id=parent.id,
+                    revision_number=7,
+                )
+                depth.status = "completed"
+                depth.stage = "completed"
+                runtime.persist_job(depth)
+                with runtime._state_lock:
+                    runtime._jobs.clear()
+                    runtime._active_job_id = None
+
+                runtime.load_jobs_from_disk()
+                restored = runtime.revision_history(depth.id)
+
+                self.assertEqual(restored[1].kind, "depth")
+                self.assertEqual(restored[1].revision_number, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

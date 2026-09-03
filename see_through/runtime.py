@@ -109,7 +109,7 @@ def create_job(
                     default=0,
                 )
                 + 1
-                if kind in {"revision", "edit"}
+                if kind in {"revision", "edit", "depth"}
                 else 0
             )
         job = Job(
@@ -229,17 +229,20 @@ def pipeline_runtime(job: Job | None = None) -> dict[str, Any]:
     layerdiff_state = "on-demand"
     depth_state = "on-demand"
     if stage in {"queued", "starting"}:
-        layerdiff_state = "loading"
-        depth_state = "pending"
+        if job and job.kind in {"edit", "depth"}:
+            depth_state = "loading" if job.kind == "depth" else "on-demand"
+        else:
+            layerdiff_state = "loading"
+            depth_state = "pending"
     elif stage == "layer-decomposition":
         layerdiff_state = "active"
         depth_state = "pending"
     elif stage in {"layer-stitching", "depth-estimation"}:
-        layerdiff_state = "resident"
+        layerdiff_state = "on-demand" if job and job.kind in {"edit", "depth"} else "resident"
         depth_state = "active" if stage == "depth-estimation" else "pending"
     elif stage == "psd-assembly":
-        layerdiff_state = "resident"
-        depth_state = "resident"
+        layerdiff_state = "on-demand" if job and job.kind in {"edit", "depth"} else "resident"
+        depth_state = "resident" if job and job.settings.get("depth_recalculated") else "on-demand"
 
     return {
         "mode": "fixed",
@@ -314,9 +317,15 @@ def _set_stage(job: Job, line: str) -> None:
         job.stage = "layer-stitching"
     elif "running marigold" in lowered:
         job.stage = "depth-estimation"
+        job.settings["depth_recalculated"] = True
     elif "applying original pixels" in lowered:
         job.stage = "layer-editing"
-    elif "building revised psd" in lowered or "psd saved" in lowered:
+    elif (
+        "building revised psd" in lowered
+        or "building edited psd" in lowered
+        or "building depth revision psd" in lowered
+        or "psd saved" in lowered
+    ):
         job.stage = "psd-assembly"
 
 
@@ -367,7 +376,7 @@ def run_job(job_id: str) -> None:
 
     settings = job.settings
     command = [sys.executable, "-u"]
-    if job.kind in {"revision", "edit"}:
+    if job.kind in {"revision", "edit", "depth"}:
         if not job.parent_job_id:
             job.status = "failed"
             job.stage = "failed"
@@ -402,8 +411,36 @@ def run_job(job_id: str) -> None:
                     str(input_path(job_id)),
                     "--save_dir",
                     str(output_root(job_id)),
+                    "--seed",
+                    str(settings["seed"]),
+                    "--resolution_depth",
+                    str(settings["depth_resolution"]),
+                    "--repo_id_depth",
+                    DEPTH_MODEL,
                 ]
             )
+            if settings.get("group_offload"):
+                command.append("--group_offload")
+        elif job.kind == "depth":
+            command.extend(
+                [
+                    str(APP_ROOT / "inference" / "scripts" / "inference_depth_revision.py"),
+                    "--parent_dir",
+                    str(output_root(job.parent_job_id) / "input"),
+                    "--srcp",
+                    str(input_path(job_id)),
+                    "--save_dir",
+                    str(output_root(job_id)),
+                    "--seed",
+                    str(settings["seed"]),
+                    "--resolution_depth",
+                    str(settings["depth_resolution"]),
+                    "--repo_id_depth",
+                    DEPTH_MODEL,
+                ]
+            )
+            if settings.get("group_offload"):
+                command.append("--group_offload")
         else:
             command.extend(
                 [
@@ -421,7 +458,7 @@ def run_job(job_id: str) -> None:
                 "--save_to_psd",
             ]
         )
-    if job.kind != "edit":
+    if job.kind in {"generation", "revision"}:
         command.extend(
             [
                 "--srcp",
@@ -449,6 +486,7 @@ def run_job(job_id: str) -> None:
         "generation": "Starting See-through inference",
         "revision": "Starting See-through revision",
         "edit": "Starting See-through detail edit",
+        "depth": "Starting See-through depth revision",
     }
     job.logs.append(start_labels.get(job.kind, "Starting See-through job"))
     job.logs.append("Command settings: " + ", ".join(f"{key}={value}" for key, value in settings.items()))
@@ -610,7 +648,8 @@ def load_jobs_from_disk() -> None:
             (
                 job
                 for job in _jobs.values()
-                if (job.root_job_id or job.id) == root_id and job.kind in {"revision", "edit"}
+                if (job.root_job_id or job.id) == root_id
+                and job.kind in {"revision", "edit", "depth"}
             ),
             key=lambda job: (job.created_at, job.id),
         )

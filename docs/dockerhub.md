@@ -127,9 +127,17 @@ The backdrop can be checkerboard, white, black, or a custom colour. To inspect t
 
 Undo and redo are available in the toolbar. `Ctrl+Z`, `Ctrl+Shift+Z`, and `Ctrl+Y` work from the keyboard, while `[` and `]` change brush size.
 
-Saving an edit stores the painted mask as a non-destructive child revision and rebuilds the layered PSD on the CPU. LayerDiff3D and Marigold do not run again. Kept edits can be reopened with **Continue editing**, and their masks remain adjustable. If that same semantic layer is later regenerated, its previous detail mask is intentionally reset; edits on other layers remain intact.
+Saving an edit stores the painted mask as a non-destructive child revision and never reruns LayerDiff3D. If the edit stays inside pixels already visible in the layer, the existing depth maps are preserved and the PSD is rebuilt on the CPU. If source restoration makes previously absent pixels visible, See-through detects that alpha expansion and automatically reruns Marigold for the complete edited layer set before PSD assembly. Kept edits can be reopened with **Continue editing**, and their masks remain adjustable. If that same semantic layer is later regenerated, its previous detail mask is intentionally reset; edits on other layers remain intact.
 
 The editor copies pixels that are already visible in the original image. It does not generate parts hidden behind hair, clothing, or accessories. Paint one semantic layer at a time and use the isolated view to avoid copying pixels belonging to neighbouring objects.
+
+## Recalculate Depth and Layer Ordering
+
+Use **Recalculate depth** on an accepted result when the artwork looks correct but its 2.5D ordering needs another attempt. Choose a depth resolution from 512 to 1280 px and optionally enter a seed. An empty seed selects a fresh random value.
+
+This creates an isolated candidate containing exactly the same artwork pixels as its parent. Marigold recalculates every visible layer, and the semantic ordering safeguards are applied when the PSD is rebuilt. Inspect the motion preview, then keep the candidate, retry it with another seed, or return to the parent. Higher resolutions can improve fine depth boundaries but use more GPU memory and time.
+
+Affected asset cards are dimmed and locked while detail edits, selective regeneration, or depth recalculation are running. They become interactive again when the candidate completes, fails, or is canceled.
 
 ## Recommended Settings
 
@@ -270,11 +278,14 @@ The UI and API run together on port `8000`.
 - Read or stop a generation: `GET` or `DELETE /v1/layer-decompositions/{job_id}`
 - Regenerate selected layers: `POST /v1/layer-decompositions/{job_id}/revisions`
 - Apply one full-canvas source-detail mask: `POST /v1/layer-decompositions/{job_id}/edits`
+- Recalculate all layer depths: `POST /v1/layer-decompositions/{job_id}/depth-revisions`
 - Read the complete revision timeline: `GET /v1/layer-decompositions/{job_id}/revisions`
 - Keep a completed candidate: `POST /v1/layer-decompositions/{job_id}/accept`
 - Download a completed PSD: `GET /v1/layer-decompositions/{job_id}/download`
 
-The detail-edit request uses multipart form data with a canonical `part` name and a mask image matching the full dimensions of that layer. Black retains generated pixels, white restores source pixels, and grey values blend between them. The endpoint returns a queued revision job and does not rerun the generation models.
+The detail-edit request uses multipart form data with a canonical `part` name and a mask image matching the full dimensions of that layer. Black retains generated pixels, white restores source pixels, and grey values blend between them. The endpoint returns a queued revision job; LayerDiff3D is never rerun, while Marigold is invoked automatically only if the edit reveals pixels outside the layer's current alpha.
+
+The depth-revision request accepts optional `seed` and `depth_resolution` multipart fields. Supported resolutions are 512, 640, 768, 896, 1024, and 1280 px. If omitted, the seed is randomized and the parent depth resolution is reused.
 
 ## Models
 

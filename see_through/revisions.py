@@ -93,8 +93,8 @@ def prepare_detail_edit(
     edited_directory: Path,
     part: str,
     mask_path: Path,
-) -> None:
-    """Apply an absolute source-restoration mask to one copied raw layer set."""
+) -> bool:
+    """Apply an absolute restoration mask and report whether fresh depth is needed."""
     part = validate_edit_part(part)
     source_path = parent_directory / "src_img.png"
     current_layer_path = parent_directory / f"{part}.png"
@@ -117,32 +117,46 @@ def prepare_detail_edit(
     with (
         Image.open(source_path).convert("RGBA") as source,
         Image.open(base_path).convert("RGBA") as base,
+        Image.open(current_layer_path).convert("RGBA") as current,
         Image.open(mask_path).convert("L") as mask,
     ):
-        if source.size != base.size or mask.size != base.size:
+        if source.size != base.size or current.size != base.size or mask.size != base.size:
             raise ValueError(
-                f"source, layer, and edit mask dimensions must match; got "
-                f"source={source.size}, layer={base.size}, mask={mask.size}"
+                "source, current layer, base layer, and edit mask dimensions must match; got "
+                f"source={source.size}, current={current.size}, base={base.size}, mask={mask.size}"
             )
         output = _premultiplied_restore(base, source, mask)
         normalized_mask_path = masks_directory / f"{part}.png"
         mask.save(normalized_mask_path, format="PNG")
         output.save(edited_directory / f"{part}.png", format="PNG")
 
+        current_alpha = np.asarray(current.getchannel("A"), dtype=np.uint8)
+        output_alpha = np.asarray(output.getchannel("A"), dtype=np.uint8)
+        mask_array = np.asarray(mask, dtype=np.uint8)
+        existing = current_alpha > 10
+        newly_visible = (mask_array > 0) & (output_alpha > 10) & ~existing
         depth_path = edited_directory / f"{part}_depth.png"
+        requires_depth_recalculation = bool(np.any(newly_visible)) or (
+            bool(np.any(output_alpha > 10)) and not depth_path.is_file()
+        )
         if depth_path.is_file():
             with Image.open(depth_path).convert("L") as depth:
                 if depth.size != base.size:
                     raise ValueError(f"layer and depth dimensions must match for {part}")
                 depth_array = np.asarray(depth, dtype=np.uint8).copy()
-            base_alpha = np.asarray(base.getchannel("A"), dtype=np.uint8)
-            output_alpha = np.asarray(output.getchannel("A"), dtype=np.uint8)
-            mask_array = np.asarray(mask, dtype=np.uint8)
-            existing = base_alpha > 10
             fallback_depth = int(np.median(depth_array[existing])) if np.any(existing) else 255
-            newly_visible = (mask_array > 0) & (output_alpha > 10) & ~existing
             depth_array[newly_visible] = fallback_depth
             Image.fromarray(depth_array, "L").save(depth_path, format="PNG")
+        return requires_depth_recalculation
+
+
+def prepare_depth_revision(parent_directory: Path, revised_directory: Path) -> None:
+    """Copy an accepted raw layer set before recalculating all of its depth maps."""
+    if not parent_directory.is_dir():
+        raise FileNotFoundError(f"parent layer directory is missing: {parent_directory}")
+    if revised_directory.exists():
+        raise FileExistsError(f"depth revision destination already exists: {revised_directory}")
+    shutil.copytree(parent_directory, revised_directory, ignore=shutil.ignore_patterns("optimized"))
 
 
 def prepare_hybrid_layers(
