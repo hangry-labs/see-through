@@ -16,7 +16,13 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageChops, UnidentifiedImageError
 
 from see_through import __version__
-from see_through.revisions import layer_manifest, validate_edit_part, validate_replacement_parts
+from see_through.revisions import (
+    available_layer_order,
+    layer_manifest,
+    validate_edit_part,
+    validate_layer_order,
+    validate_replacement_parts,
+)
 from see_through.runtime import (
     JOBS_ROOT,
     accept_revision,
@@ -183,6 +189,8 @@ def create_decomposition_revision(
         "inference_steps": inference_steps or parent.settings["inference_steps"],
         "group_offload": parent.settings["group_offload"],
     }
+    if isinstance(parent.settings.get("layer_order"), list):
+        settings["layer_order"] = list(parent.settings["layer_order"])
     try:
         revision = create_job(
             settings,
@@ -317,6 +325,7 @@ def create_depth_revision(
         raise HTTPException(422, "depth_resolution is not supported")
     settings = dict(parent.settings)
     settings.pop("edit_part", None)
+    settings.pop("layer_order", None)
     settings.update(
         {
             "seed": seed if seed is not None else secrets.randbelow(2_147_483_648),
@@ -343,6 +352,56 @@ def create_depth_revision(
     except OSError as exc:
         discard_queued_job(revision.id)
         raise HTTPException(500, "could not stage the depth revision") from exc
+    background_tasks.add_task(run_job, revision.id)
+    return revision.public()
+
+
+@app.post(
+    "/v1/layer-decompositions/{job_id}/order-revisions",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_order_revision(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    order: list[str] = Form(...),
+) -> dict[str, object]:
+    """Create an immutable candidate with a user-defined front-to-back stack."""
+    parent = get_job(job_id)
+    if parent is None:
+        raise HTTPException(404, "parent job not found")
+    if parent.status != "completed":
+        raise HTTPException(409, f"parent job is {parent.status}")
+    parent_layers = output_root(parent.id) / "input"
+    if not input_path(parent.id).is_file() or not parent_layers.is_dir():
+        raise HTTPException(409, "parent job does not contain reusable inference layers")
+    try:
+        layer_order = validate_layer_order(order, available_layer_order(parent_layers))
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    settings = dict(parent.settings)
+    settings.pop("edit_part", None)
+    settings["layer_order"] = layer_order
+    settings["depth_recalculated"] = False
+    try:
+        revision = create_job(
+            settings,
+            kind="order",
+            parent_job_id=parent.id,
+            root_job_id=parent.root_job_id or parent.id,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+    try:
+        root = job_root(revision.id)
+        root.mkdir(parents=True, exist_ok=False)
+        output_root(revision.id).mkdir(parents=True, exist_ok=True)
+        shutil.copy2(input_path(parent.id), input_path(revision.id))
+        persist_job(revision)
+    except OSError as exc:
+        discard_queued_job(revision.id)
+        raise HTTPException(500, "could not stage the order revision") from exc
     background_tasks.add_task(run_job, revision.id)
     return revision.public()
 

@@ -10,6 +10,11 @@ const state = {
   selectedParts: new Set(),
   processingKind: null,
   processingParts: new Set(),
+  layerOrder: [],
+  automaticLayerOrder: [],
+  initialLayerOrder: [],
+  layerMetadata: null,
+  draggedPart: null,
 }
 const previewState = {
   frame: null, running: true, hovering: false,
@@ -18,6 +23,7 @@ const previewState = {
 }
 const editorState = {
   job: null, part: null, base: null, original: null, layers: [], depths: new Map(),
+  order: [],
   maskCanvas: document.createElement('canvas'), editedCanvas: document.createElement('canvas'),
   sourceCanvas: document.createElement('canvas'), undo: [], redo: [], painting: false,
   lastPoint: null, distanceToNextDab: 0, renderPending: false,
@@ -224,11 +230,12 @@ async function pollJob() {
       setStatus(
         job.kind === 'edit' ? 'Detail edit ready for review.'
           : job.kind === 'depth' ? 'Depth revision ready for review.'
+          : job.kind === 'order' ? 'Layer order revision ready for review.'
           : job.kind === 'revision' ? 'Candidate revision ready for review.'
             : 'Layered PSD generated successfully.',
         'success',
       )
-      renderResults(job)
+      await renderResults(job)
       return
     }
     if (job.status === 'failed') {
@@ -265,7 +272,7 @@ async function pollJob() {
   }
 }
 
-function renderResults(job) {
+async function renderResults(job) {
   setProcessingState()
   $('#cancel-job').hidden = true
   state.currentJob = job
@@ -275,6 +282,22 @@ function renderResults(job) {
   const results = $('#results')
   const gallery = $('#asset-gallery')
   gallery.replaceChildren()
+  let metadata = { parts: {} }
+  try {
+    metadata = await loadLayerMetadata(job)
+  } catch (error) {
+    console.warn('Layer metadata unavailable:', error)
+  }
+  state.layerMetadata = metadata
+  state.automaticLayerOrder = automaticLayerOrder(metadata)
+  const explicitOrder = Array.isArray(metadata.layer_order)
+    ? metadata.layer_order.filter((name) => state.automaticLayerOrder.includes(name))
+    : []
+  state.layerOrder = explicitOrder.length === state.automaticLayerOrder.length
+    ? [...explicitOrder]
+    : [...state.automaticLayerOrder]
+  state.initialLayerOrder = [...state.layerOrder]
+  state.draggedPart = null
   $('#download-psd').href = job.download_url
   const candidate = job.kind !== 'generation' && !job.accepted_at
   $('#result-eyebrow').textContent = candidate ? 'REVISION PREVIEW' : job.revision_number ? 'KEPT REVISION' : 'RESULT'
@@ -282,11 +305,14 @@ function renderResults(job) {
   $('#results-copy').textContent = candidate
     ? job.kind === 'depth'
       ? 'Inspect the new ordering and layer motion. The artwork is unchanged until you keep this depth revision.'
+      : job.kind === 'order'
+        ? 'Inspect the manual stack in the grid and 2.5D preview. Keep it only when the overlap is correct.'
       : 'Inspect the stitched preview and replacement layers. Keep this revision only when it improves the result.'
     : 'Select any imperfect or missing semantic layers below to generate a non-destructive revision.'
   $('#revision-review').hidden = !candidate
   $('#refinement-panel').hidden = candidate
-  $('#retry-revision').hidden = job.kind === 'edit'
+  $('#retry-revision').hidden = job.kind === 'edit' || job.kind === 'order'
+  $('#layer-order-panel').hidden = candidate || !state.layerOrder.length
   if (candidate) {
     $$('.revision-review-actions button').forEach((button) => { button.disabled = false })
     const names = job.replaced_parts.map(formatPartName)
@@ -294,6 +320,8 @@ function renderResults(job) {
       ? `Revision ${job.revision_number} · detail edit`
       : job.kind === 'depth'
         ? `Revision ${job.revision_number} · depth seed ${job.settings.seed}`
+        : job.kind === 'order'
+          ? `Revision ${job.revision_number} · manual layer order`
         : `Revision ${job.revision_number} · seed ${job.settings.seed}`
     $('#revision-review-copy').textContent = job.kind === 'edit'
       ? job.settings.depth_recalculated
@@ -301,6 +329,8 @@ function renderResults(job) {
         : `Restored original detail in ${formatNameList(names)} while preserving its existing depth.`
       : job.kind === 'depth'
         ? `Recalculated all layer depths at ${job.settings.depth_resolution} px. The parent result remains unchanged.`
+        : job.kind === 'order'
+          ? 'Rebuilt the PSD with the selected front-to-back stack. The parent result remains unchanged.'
         : `Replaced ${formatNameList(names)}. The parent result remains unchanged.`
   }
 
@@ -309,13 +339,31 @@ function renderResults(job) {
     $('#depth-revision-resolution').value = depthResolution
   }
 
-  ;(job.parts || []).forEach((part) => {
+  const orderIndex = new Map(state.layerOrder.map((name, index) => [name, index]))
+  const orderedParts = [...(job.parts || [])].sort((left, right) => {
+    const leftIndex = orderIndex.get(left.name)
+    const rightIndex = orderIndex.get(right.name)
+    if (leftIndex !== undefined && rightIndex !== undefined) return leftIndex - rightIndex
+    if (leftIndex !== undefined) return -1
+    if (rightIndex !== undefined) return 1
+    return 0
+  })
+
+  orderedParts.forEach((part) => {
     const card = document.createElement('article')
     card.className = 'asset-card'
     card.dataset.part = part.name
     card.dataset.visible = String(Boolean(part.visible))
     card.dataset.replaced = String(job.replaced_parts.includes(part.name))
     card.dataset.edited = String(Boolean(part.edited))
+    const reorderable = Boolean(job.accepted_at && orderIndex.has(part.name))
+    card.dataset.reorderable = String(reorderable)
+    card.draggable = reorderable
+    if (orderIndex.has(part.name)) {
+      const orderBadge = document.createElement('span')
+      orderBadge.className = 'asset-order-badge'
+      card.append(orderBadge)
+    }
     const label = document.createElement('label')
     label.className = 'asset-select'
     const checkbox = document.createElement('input')
@@ -366,18 +414,42 @@ function renderResults(job) {
     if (part.url && job.accepted_at) {
       const actions = document.createElement('div')
       actions.className = 'asset-card-actions'
+      if (reorderable) {
+        const forward = document.createElement('button')
+        forward.type = 'button'
+        forward.className = 'text-button asset-order-step'
+        forward.dataset.direction = 'forward'
+        forward.title = `Move ${part.name} toward the front`
+        forward.setAttribute('aria-label', forward.title)
+        forward.innerHTML = '<i class="icon-arrow-left"></i>'
+        forward.addEventListener('click', () => moveLayerOrder(part.name, -1))
+        actions.append(forward)
+      }
       const edit = document.createElement('button')
       edit.type = 'button'
       edit.className = 'text-button asset-edit'
       edit.innerHTML = `<i class="icon-paintbrush"></i> ${part.edited ? 'Continue editing' : 'Edit details'}`
       edit.addEventListener('click', () => openLayerEditor(job, part))
       actions.append(edit)
+      if (reorderable) {
+        const backward = document.createElement('button')
+        backward.type = 'button'
+        backward.className = 'text-button asset-order-step'
+        backward.dataset.direction = 'backward'
+        backward.title = `Move ${part.name} toward the back`
+        backward.setAttribute('aria-label', backward.title)
+        backward.innerHTML = '<i class="icon-arrow-right"></i>'
+        backward.addEventListener('click', () => moveLayerOrder(part.name, 1))
+        actions.append(backward)
+      }
       card.append(actions)
     }
+    if (reorderable) bindLayerDragEvents(card)
     gallery.append(card)
   })
+  renderLayerOrder()
   updateSelectionControls()
-  renderPuppetPreview(job).catch((error) => {
+  renderPuppetPreview(job, metadata).catch((error) => {
     console.warn('Layer preview unavailable:', error)
     $('#puppet-preview').hidden = true
   })
@@ -395,12 +467,148 @@ function formatNameList(names) {
   return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
 }
 
+async function loadLayerMetadata(job) {
+  const asset = job.assets.find((item) => item.name === 'input.psd.json')
+  if (!asset) return { parts: {} }
+  const response = await fetch(asset.url)
+  if (!response.ok) throw new Error(await responseError(response))
+  return response.json()
+}
+
+function automaticLayerOrder(metadata) {
+  const parts = metadata.parts || {}
+  const semanticDepths = previewDepths(parts)
+  const eyeStack = ['eyewhite', 'irides', 'eyelash', 'eyebrow', 'eyewear']
+  const eyeDepths = eyeStack
+    .map((name) => parts[name]?.depth_median)
+    .filter((depth) => Number.isFinite(depth))
+  const eyeAnchor = eyeDepths.length ? Math.min(...eyeDepths) : null
+  const canonicalIndex = new Map((state.currentJob?.parts || []).map((part, index) => [part.name, index]))
+  return Object.keys(parts).sort((left, right) => {
+    const depthFor = (name) => {
+      const eyeIndex = eyeStack.indexOf(name)
+      if (eyeIndex >= 0 && eyeAnchor !== null) {
+        return eyeAnchor + (eyeStack.length - 1 - eyeIndex) * 0.002
+      }
+      return semanticDepths.get(name) ?? 0.5
+    }
+    return depthFor(left) - depthFor(right)
+      || (canonicalIndex.get(left) ?? 999) - (canonicalIndex.get(right) ?? 999)
+  })
+}
+
+function sameOrder(left, right) {
+  return left.length === right.length && left.every((name, index) => name === right[index])
+}
+
+function applyPreviewLayerOrder() {
+  const orderIndex = new Map(state.layerOrder.map((name, index) => [name, index]))
+  const count = Math.max(1, state.layerOrder.length)
+  previewState.layers.forEach((layer) => {
+    const index = orderIndex.get(layer.name)
+    if (index === undefined) return
+    layer.stackProximity = count === 1 ? 1 : 1 - index / (count - 1)
+    layer.element.style.zIndex = String(10000 + count - index)
+  })
+}
+
+function renderLayerOrder() {
+  const gallery = $('#asset-gallery')
+  const cards = $$('.asset-card', gallery)
+  const cardsByPart = new Map(cards.map((card) => [card.dataset.part, card]))
+  state.layerOrder.forEach((name) => {
+    const card = cardsByPart.get(name)
+    if (card) gallery.append(card)
+  })
+  cards.filter((card) => !state.layerOrder.includes(card.dataset.part)).forEach((card) => gallery.append(card))
+
+  const count = state.layerOrder.length
+  state.layerOrder.forEach((name, index) => {
+    const card = cardsByPart.get(name)
+    if (!card) return
+    const badge = $('.asset-order-badge', card)
+    if (badge) {
+      badge.textContent = index === 0 ? '1 · FRONT' : index === count - 1 ? `${index + 1} · BACK` : String(index + 1)
+      badge.dataset.edge = index === 0 ? 'front' : index === count - 1 ? 'back' : ''
+    }
+    const forward = $('[data-direction="forward"]', card)
+    const backward = $('[data-direction="backward"]', card)
+    if (forward) forward.disabled = state.processingKind !== null || index === 0
+    if (backward) backward.disabled = state.processingKind !== null || index === count - 1
+  })
+
+  const dirty = !sameOrder(state.layerOrder, state.initialLayerOrder)
+  const automatic = sameOrder(state.layerOrder, state.automaticLayerOrder)
+  $('#save-layer-order').disabled = state.processingKind !== null || !dirty
+  $('#reset-layer-order').disabled = state.processingKind !== null || automatic
+  $('#layer-order-status').textContent = dirty
+    ? automatic
+      ? 'Automatic order restored locally. Save it to create a reviewable revision.'
+      : 'Unsaved manual order. The 2.5D preview is showing this stack live.'
+    : Array.isArray(state.layerMetadata?.layer_order)
+      ? 'Saved manual order. Drag a visible card or use its arrow buttons to make another revision.'
+      : 'Automatic Marigold order. Drag a visible card to override it.'
+  applyPreviewLayerOrder()
+}
+
+function moveLayerOrder(part, direction) {
+  if (state.processingKind !== null) return
+  const index = state.layerOrder.indexOf(part)
+  const destination = index + direction
+  if (index < 0 || destination < 0 || destination >= state.layerOrder.length) return
+  ;[state.layerOrder[index], state.layerOrder[destination]] = [state.layerOrder[destination], state.layerOrder[index]]
+  renderLayerOrder()
+}
+
+function bindLayerDragEvents(card) {
+  card.addEventListener('dragstart', (event) => {
+    if (state.processingKind !== null) {
+      event.preventDefault()
+      return
+    }
+    state.draggedPart = card.dataset.part
+    card.classList.add('is-dragging')
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', card.dataset.part)
+  })
+  card.addEventListener('dragover', (event) => {
+    if (!state.draggedPart || state.draggedPart === card.dataset.part) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    $$('.asset-card.is-drop-target').forEach((item) => item.classList.remove('is-drop-target'))
+    card.classList.add('is-drop-target')
+  })
+  card.addEventListener('dragleave', () => card.classList.remove('is-drop-target'))
+  card.addEventListener('drop', (event) => {
+    event.preventDefault()
+    const dragged = state.draggedPart
+    const target = card.dataset.part
+    if (!dragged || dragged === target) return
+    const nextOrder = state.layerOrder.filter((name) => name !== dragged)
+    const targetIndex = nextOrder.indexOf(target)
+    const bounds = card.getBoundingClientRect()
+    const horizontal = Math.abs(event.clientY - (bounds.top + bounds.height / 2)) < bounds.height / 3
+    const placeAfter = horizontal
+      ? event.clientX > bounds.left + bounds.width / 2
+      : event.clientY > bounds.top + bounds.height / 2
+    nextOrder.splice(targetIndex + (placeAfter ? 1 : 0), 0, dragged)
+    state.layerOrder = nextOrder
+    renderLayerOrder()
+  })
+  card.addEventListener('dragend', () => {
+    state.draggedPart = null
+    $$('.asset-card.is-dragging,.asset-card.is-drop-target').forEach((item) => {
+      item.classList.remove('is-dragging', 'is-drop-target')
+    })
+  })
+}
+
 function setProcessingState(kind = null, parts = [], label = 'Processing') {
   state.processingKind = kind
   state.processingParts = new Set(parts || [])
   const busy = Boolean(kind)
   $$('.asset-card').forEach((card) => {
-    const affected = busy && (kind === 'depth' || kind === 'generation' || state.processingParts.has(card.dataset.part))
+    const affected = busy && (kind === 'depth' || kind === 'order' || kind === 'generation' || state.processingParts.has(card.dataset.part))
     card.classList.toggle('is-processing', affected)
     card.toggleAttribute('aria-busy', affected)
     if (affected) card.dataset.processingLabel = label
@@ -421,6 +629,7 @@ function setProcessingState(kind = null, parts = [], label = 'Processing') {
     $(selector).disabled = busy
   }
   updateSelectionControls()
+  if (state.layerOrder.length) renderLayerOrder()
 }
 
 function updateSelectionControls() {
@@ -453,6 +662,8 @@ async function renderRevisionHistory(job) {
     const title = document.createElement('strong')
     title.textContent = item.kind === 'depth'
       ? 'Depth ordering'
+      : item.kind === 'order'
+        ? 'Manual layer order'
       : item.replaced_parts.length
         ? formatNameList(item.replaced_parts.map(formatPartName))
         : 'Initial decomposition'
@@ -461,6 +672,8 @@ async function renderRevisionHistory(job) {
       ? `Manual detail edit${item.settings.depth_recalculated ? ' + depth' : ''} · ${stageLabel(item.stage)}`
       : item.kind === 'depth'
         ? `${item.settings.depth_resolution} px · seed ${item.settings.seed ?? 'unknown'} · ${stageLabel(item.stage)}`
+        : item.kind === 'order'
+          ? `Front-to-back stack · ${stageLabel(item.stage)}`
         : `Seed ${item.settings.seed ?? 'unknown'} · ${stageLabel(item.stage)}`
     copy.append(title, detail)
     const badge = document.createElement('span')
@@ -552,6 +765,42 @@ async function startDepthRevision(parentJobId) {
   }
 }
 
+async function startOrderRevision(parentJobId) {
+  if (!parentJobId || !state.layerOrder.length) return
+  clearTimeout(state.pollTimer)
+  $('#job-progress').hidden = false
+  setProgressState('active')
+  $('#job-stage').textContent = 'Preparing layer order'
+  $('#job-log').textContent = ''
+  $('#cancel-job').hidden = false
+  $('#cancel-job').disabled = false
+  $('#cancel-job').innerHTML = '<i class="icon-square"></i> Stop ordering'
+  setProcessingState('order', [], 'Building layer stack')
+  $$('.revision-review-actions button').forEach((button) => { button.disabled = true })
+  setStatus('Building a PSD with the selected front-to-back order…')
+  $('#job-progress').scrollIntoView({ behavior: 'smooth', block: 'start' })
+
+  try {
+    const body = new FormData()
+    state.layerOrder.forEach((part) => body.append('order', part))
+    const response = await fetch(`/v1/layer-decompositions/${parentJobId}/order-revisions`, { method: 'POST', body })
+    if (!response.ok) throw new Error(await responseError(response))
+    const job = await response.json()
+    state.jobId = job.id
+    history.replaceState({}, '', `?job=${job.id}`)
+    $('#job-id').textContent = job.id.slice(0, 12)
+    setProcessingState(job.kind, job.replaced_parts, stageLabel(job.stage))
+    pollJob()
+  } catch (error) {
+    setProcessingState()
+    setProgressState('failed')
+    $('#cancel-job').hidden = true
+    $$('.revision-review-actions button').forEach((button) => { button.disabled = false })
+    setStatus(error.message, 'error')
+    showToast(error.message)
+  }
+}
+
 async function showJob(jobId) {
   clearTimeout(state.pollTimer)
   try {
@@ -566,7 +815,7 @@ async function showJob(jobId) {
     if (job.status === 'completed') {
       setProgressState('completed')
       $('#cancel-job').hidden = true
-      renderResults(job)
+      await renderResults(job)
       setStatus(job.accepted_at ? 'Viewing a kept result.' : 'Review this candidate revision.', 'success')
     } else if (job.status === 'queued' || job.status === 'running') {
       setProgressState('active')
@@ -607,6 +856,16 @@ $('#recalculate-depth').addEventListener('click', () => {
   startDepthRevision(state.currentJob.id)
 })
 
+$('#reset-layer-order').addEventListener('click', () => {
+  state.layerOrder = [...state.automaticLayerOrder]
+  renderLayerOrder()
+})
+
+$('#save-layer-order').addEventListener('click', () => {
+  if (!state.currentJob?.accepted_at || sameOrder(state.layerOrder, state.initialLayerOrder)) return
+  startOrderRevision(state.currentJob.id)
+})
+
 $('#keep-revision').addEventListener('click', async () => {
   if (!state.currentJob || state.currentJob.accepted_at) return
   const button = $('#keep-revision')
@@ -615,7 +874,7 @@ $('#keep-revision').addEventListener('click', async () => {
     const response = await fetch(`/v1/layer-decompositions/${state.currentJob.id}/accept`, { method: 'POST' })
     if (!response.ok) throw new Error(await responseError(response))
     const job = await response.json()
-    renderResults(job)
+    await renderResults(job)
     setStatus('Revision kept. You can refine additional layers or download the new PSD.', 'success')
   } catch (error) {
     setStatus(`Could not keep revision: ${error.message}`, 'error')
@@ -695,6 +954,9 @@ async function openLayerEditor(job, part) {
       name,
       Number.isFinite(value.depth_median) ? value.depth_median : 0.5,
     ]))
+    editorState.order = Array.isArray(metadata.layer_order)
+      ? [...metadata.layer_order]
+      : [...state.layerOrder]
 
     const width = base.naturalWidth
     const height = base.naturalHeight
@@ -737,6 +999,7 @@ function closeLayerEditor() {
   editorState.base = null
   editorState.original = null
   editorState.layers = []
+  editorState.order = []
   editorState.undo = []
   editorState.redo = []
   editorState.cursorVisible = false
@@ -784,9 +1047,13 @@ function renderLayerEditor() {
 
   const otherOpacity = Number($('#other-opacity').value) / 100
   const assetOpacity = Number($('#asset-opacity').value) / 100
-  const layers = [...editorState.layers].sort((left, right) => (
-    (editorState.depths.get(right.name) ?? 0.5) - (editorState.depths.get(left.name) ?? 0.5)
-  ))
+  const orderIndex = new Map(editorState.order.map((name, index) => [name, index]))
+  const layers = [...editorState.layers].sort((left, right) => {
+    if (orderIndex.has(left.name) && orderIndex.has(right.name)) {
+      return orderIndex.get(right.name) - orderIndex.get(left.name)
+    }
+    return (editorState.depths.get(right.name) ?? 0.5) - (editorState.depths.get(left.name) ?? 0.5)
+  })
   if (otherOpacity === 0) {
     context.globalAlpha = assetOpacity
     context.drawImage(editorState.editedCanvas, 0, 0)
@@ -1163,13 +1430,9 @@ function previewDepths(parts) {
   return depths
 }
 
-async function renderPuppetPreview(job) {
+async function renderPuppetPreview(job, metadata = null) {
   stopPuppetPreview()
-  const metadataAsset = job.assets.find((asset) => asset.name === 'input.psd.json')
-  if (!metadataAsset) return
-  const response = await fetch(metadataAsset.url)
-  if (!response.ok) throw new Error(await responseError(response))
-  const metadata = await response.json()
+  if (!metadata) metadata = await loadLayerMetadata(job)
   const parts = Object.entries(metadata.parts || {})
   if (!parts.length) return
   const eyeStack = ['eyewhite', 'irides', 'eyelash', 'eyebrow', 'eyewear']
@@ -1213,9 +1476,10 @@ async function renderPuppetPreview(job) {
     image.style.zIndex = String(Math.round((1 - depth) * 10000))
     image.style.transformOrigin = `${((bounds[0] + bounds[2]) / 2 / frameWidth) * 100}% ${((bounds[1] + bounds[3]) / 2 / frameHeight) * 100}%`
     rig.append(image)
-    previewState.layers.push({ element: image, depth, name })
+    previewState.layers.push({ element: image, depth, name, stackProximity: null })
   }
   if (!previewState.layers.length) return
+  applyPreviewLayerOrder()
 
   previewState.running = !window.matchMedia('(prefers-reduced-motion: reduce)').matches
   previewState.startedAt = performance.now()
@@ -1245,7 +1509,8 @@ function animatePuppetPreview(now) {
     const x = previewState.currentX * parallax * intensity * 18 + sway * 0.65
     const y = previewState.currentY * parallax * intensity * 10 + Math.cos(elapsed * 0.9 + index) * flexible * intensity * 0.45
     const rotate = sway * proximity * 0.18
-    layer.element.style.transform = `translate3d(${x.toFixed(2)}px,${y.toFixed(2)}px,${(proximity * 18).toFixed(1)}px) rotate(${rotate.toFixed(3)}deg) scale(1.008)`
+    const stackProximity = layer.stackProximity ?? proximity
+    layer.element.style.transform = `translate3d(${x.toFixed(2)}px,${y.toFixed(2)}px,${(stackProximity * 18).toFixed(1)}px) rotate(${rotate.toFixed(3)}deg) scale(1.008)`
   })
   previewState.frame = requestAnimationFrame(animatePuppetPreview)
 }

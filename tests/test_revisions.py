@@ -6,11 +6,14 @@ from PIL import Image
 
 from see_through.revisions import (
     CANONICAL_PARTS,
+    available_layer_order,
     layer_manifest,
     prepare_depth_revision,
     prepare_detail_edit,
     prepare_hybrid_layers,
+    prepare_order_revision,
     validate_edit_part,
+    validate_layer_order,
     validate_replacement_parts,
 )
 
@@ -20,6 +23,30 @@ def save_layer(path: Path, color: tuple[int, int, int, int]) -> None:
 
 
 class RevisionLayerTests(unittest.TestCase):
+    def test_layer_order_requires_a_complete_unique_permutation(self):
+        available = ["front hair", "face", "topwear"]
+
+        self.assertEqual(
+            validate_layer_order(["topwear", "face", "front hair"], available),
+            ["topwear", "face", "front hair"],
+        )
+        with self.assertRaisesRegex(ValueError, "duplicates"):
+            validate_layer_order(["face", "face", "topwear"], available)
+        with self.assertRaisesRegex(ValueError, "include every visible layer"):
+            validate_layer_order(["face", "topwear"], available)
+
+    def test_available_order_comes_from_psd_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output = Path(temporary_directory)
+            layers = output / "input"
+            layers.mkdir()
+            (output / "input.psd.json").write_text(
+                '{"parts":{"face":{},"topwear":{}}}',
+                encoding="utf-8",
+            )
+
+            self.assertEqual(available_layer_order(layers), ["face", "topwear"])
+
     def test_edit_part_validation_accepts_only_canonical_layers(self):
         self.assertEqual(validate_edit_part(" front hair "), "front hair")
         with self.assertRaisesRegex(ValueError, "unsupported edit part"):
@@ -184,6 +211,22 @@ class RevisionLayerTests(unittest.TestCase):
 
             self.assertTrue((revised / "face.png").is_file())
             self.assertTrue((revised / "edit_masks" / "face.png").is_file())
+            self.assertFalse((revised / "optimized").exists())
+
+    def test_order_revision_copies_layers_without_optimized_outputs(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            parent = root / "parent"
+            parent.mkdir()
+            save_layer(parent / "src_img.png", (5, 5, 5, 255))
+            save_layer(parent / "face.png", (10, 20, 30, 255))
+            (parent / "optimized").mkdir()
+            save_layer(parent / "optimized" / "face.png", (1, 2, 3, 255))
+
+            revised = root / "revised"
+            prepare_order_revision(parent, revised)
+
+            self.assertTrue((revised / "face.png").is_file())
             self.assertFalse((revised / "optimized").exists())
 
     def test_detail_edit_rejects_a_misaligned_mask(self):

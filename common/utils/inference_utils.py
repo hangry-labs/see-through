@@ -426,7 +426,7 @@ def tag_lr_split(tag: str, tag2pinfo):
         tag2pinfo.update(part_lr_split(tag, part_info))
 
 
-def further_extr(srcd: str, rotate=True, save_to_psd=False, tblr_split=True):
+def further_extr(srcd: str, rotate=True, save_to_psd=False, tblr_split=True, layer_order=None):
 
 
     saved = osp.join(srcd, 'optimized')
@@ -534,26 +534,52 @@ def further_extr(srcd: str, rotate=True, save_to_psd=False, tblr_split=True):
     frame_size = fullpage.shape[:2]
 
     if save_to_psd:
-        dump_parts_psd(tag2pinfo, frame_size, psd_savep, part_dict_list=part_dict_list)
+        dump_parts_psd(
+            tag2pinfo,
+            frame_size,
+            psd_savep,
+            part_dict_list=part_dict_list,
+            layer_order=layer_order,
+        )
         print(f'psd saved to {psd_savep}')
     else:
         dict2json({'parts': tag2pinfo, 'frame_size': frame_size}, osp.join(saved, 'info.json'))
 
 
-def dump_parts_psd(tag2pinfo, frame_size, psd_savep, part_dict_list=None):
+def dump_parts_psd(tag2pinfo, frame_size, psd_savep, part_dict_list=None, layer_order=None):
     if part_dict_list is None:
         part_dict_list = []
         for v in tag2pinfo.values():
             part_dict_list.append(v)
     psd_depth_savep = osp.splitext(psd_savep)[0] + '_depth.psd'
-    part_dict_list.sort(key=lambda x: x['depth_median'], reverse=True)
+    resolved_layer_order = None
+    if layer_order:
+        present = {item.get('tag') for item in part_dict_list}
+        resolved_layer_order = [name for name in layer_order if name in present]
+        missing = sorted(
+            (item for item in part_dict_list if item.get('tag') not in resolved_layer_order),
+            key=lambda item: item['depth_median'],
+        )
+        resolved_layer_order.extend(item.get('tag') for item in missing)
+        # The public/manual order is front-to-back. Pixel layers are created
+        # back-to-front so the first item in the manual order is drawn last.
+        order_index = {name: index for index, name in enumerate(resolved_layer_order)}
+        part_dict_list.sort(
+            key=lambda item: order_index.get(item.get('tag'), len(order_index)),
+            reverse=True,
+        )
+    else:
+        part_dict_list.sort(key=lambda x: x['depth_median'], reverse=True)
     save_psd(psd_savep, part_dict_list, frame_size[0], frame_size[1])
     save_psd(psd_depth_savep, part_dict_list, frame_size[0], frame_size[1], mode='L', img_key='depth')
     for pdict in tag2pinfo.values():
         for k in {'img', 'depth', 'mask'}:
             if k in pdict:
                 pdict.pop(k)
-    dict2json({'parts': tag2pinfo, 'frame_size': frame_size}, psd_savep + '.json')
+    metadata = {'parts': tag2pinfo, 'frame_size': frame_size}
+    if resolved_layer_order:
+        metadata['layer_order'] = resolved_layer_order
+    dict2json(metadata, psd_savep + '.json')
 
 
 def psd2partdicts(srcp):

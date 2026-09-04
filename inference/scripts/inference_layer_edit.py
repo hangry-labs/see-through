@@ -23,6 +23,7 @@ def main() -> None:
     parser.add_argument("--parent_dir", required=True)
     parser.add_argument("--save_dir", required=True)
     parser.add_argument("--part", required=True)
+    parser.add_argument("--layer_order", action="append")
     parser.add_argument("--mask", required=True)
     parser.add_argument("--repo_id_depth", required=True)
     parser.add_argument("--resolution_depth", type=int, default=768)
@@ -53,7 +54,13 @@ def main() -> None:
     else:
         print("edited pixels remain inside the existing layer; preserving depth maps")
     print("building edited PSD...")
-    further_extr(str(edited_directory), rotate=False, save_to_psd=True, tblr_split=False)
+    further_extr(
+        str(edited_directory),
+        rotate=False,
+        save_to_psd=True,
+        tblr_split=False,
+        layer_order=args.layer_order,
+    )
 
 
 if __name__ == "__main__":

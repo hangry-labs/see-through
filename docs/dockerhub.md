@@ -13,6 +13,7 @@ This Docker image includes:
 - Automatic character layer generation
 - An animated 2.5D layer preview
 - Press-and-hold original/2.5D comparison
+- Drag-and-drop front-to-back layer ordering
 - Individual generated assets
 - Selective regeneration of incorrect or missing layers
 - A full-resolution brush editor for restoring source detail
@@ -87,7 +88,7 @@ http://localhost:8000
 3. Select **Generate layered PSD**.
 4. Wait while the application generates layers and estimates their depth.
 5. Inspect the animated preview and individual assets. Press and hold **Hold for original** to compare the source against the generated 2.5D result, then release it to return to motion.
-6. Download the layered PSD, selectively regenerate incorrect layers, or use **Edit details** to restore fine source pixels before export.
+6. Download the layered PSD, reorder incorrect overlaps, selectively regenerate layers, or use **Edit details** to restore fine source pixels before export.
 
 Generation can be stopped safely with **Stop generation** while a job is running.
 
@@ -136,6 +137,12 @@ The editor copies pixels that are already visible in the original image. It does
 Use **Recalculate depth** on an accepted result when the artwork looks correct but its 2.5D ordering needs another attempt. Choose a depth resolution from 512 to 1280 px and optionally enter a seed. An empty seed selects a fresh random value.
 
 This creates an isolated candidate containing exactly the same artwork pixels as its parent. Marigold recalculates every visible layer, and the semantic ordering safeguards are applied when the PSD is rebuilt. Inspect the motion preview, then keep the candidate, retry it with another seed, or return to the parent. Higher resolutions can improve fine depth boundaries but use more GPU memory and time.
+
+### Manually reorder layers
+
+The layer grid doubles as the exported layer stack. Visible cards are numbered **Front** to **Back** from left-to-right and top-to-bottom. Drag cards into the desired order, or use the left and right arrow buttons for precise one-step changes. The 2.5D preview updates immediately while you work.
+
+Select **Save order revision** to rebuild the PSD as an isolated candidate. This operation only copies and reorders existing assets on the CPU; it does not run LayerDiff3D or Marigold. **Reset to automatic** restores the current estimated order. Kept manual ordering remains active through later detail edits and selective regeneration, while **Recalculate depth** intentionally returns to a fresh automatic order.
 
 Affected asset cards are dimmed and locked while detail edits, selective regeneration, or depth recalculation are running. They become interactive again when the candidate completes, fails, or is canceled.
 
@@ -279,6 +286,7 @@ The UI and API run together on port `8000`.
 - Regenerate selected layers: `POST /v1/layer-decompositions/{job_id}/revisions`
 - Apply one full-canvas source-detail mask: `POST /v1/layer-decompositions/{job_id}/edits`
 - Recalculate all layer depths: `POST /v1/layer-decompositions/{job_id}/depth-revisions`
+- Apply a complete front-to-back stack: `POST /v1/layer-decompositions/{job_id}/order-revisions`
 - Read the complete revision timeline: `GET /v1/layer-decompositions/{job_id}/revisions`
 - Keep a completed candidate: `POST /v1/layer-decompositions/{job_id}/accept`
 - Download a completed PSD: `GET /v1/layer-decompositions/{job_id}/download`
@@ -286,6 +294,8 @@ The UI and API run together on port `8000`.
 The detail-edit request uses multipart form data with a canonical `part` name and a mask image matching the full dimensions of that layer. Black retains generated pixels, white restores source pixels, and grey values blend between them. The endpoint returns a queued revision job; LayerDiff3D is never rerun, while Marigold is invoked automatically only if the edit reveals pixels outside the layer's current alpha.
 
 The depth-revision request accepts optional `seed` and `depth_resolution` multipart fields. Supported resolutions are 512, 640, 768, 896, 1024, and 1280 px. If omitted, the seed is randomized and the parent depth resolution is reused.
+
+The order-revision request repeats the multipart `order` field for every layer represented by the parent PSD metadata, listed front-to-back. Each layer must appear exactly once. The response is a normal queued revision job that can be polled, reviewed, and accepted without GPU inference.
 
 ## Models
 

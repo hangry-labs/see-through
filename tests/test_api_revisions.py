@@ -153,6 +153,41 @@ class RevisionApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertIn("depth_resolution is not supported", response.json()["detail"])
 
+    def test_order_revision_endpoint_stages_a_cpu_only_candidate(self):
+        metadata_path = runtime.output_root(self.parent.id) / "input.psd.json"
+        metadata_path.write_text(
+            '{"parts":{"front hair":{},"topwear":{}}}',
+            encoding="utf-8",
+        )
+        with patch.object(application, "run_job"):
+            response = self.client.post(
+                f"/v1/layer-decompositions/{self.parent.id}/order-revisions",
+                files=[("order", (None, "topwear")), ("order", (None, "front hair"))],
+            )
+
+        self.assertEqual(response.status_code, 202)
+        payload = response.json()
+        self.assertEqual(payload["kind"], "order")
+        self.assertEqual(payload["parent_job_id"], self.parent.id)
+        self.assertEqual(payload["settings"]["layer_order"], ["topwear", "front hair"])
+        self.assertFalse(payload["settings"]["depth_recalculated"])
+        self.assertTrue(runtime.input_path(payload["id"]).is_file())
+
+    def test_order_revision_endpoint_rejects_an_incomplete_stack(self):
+        metadata_path = runtime.output_root(self.parent.id) / "input.psd.json"
+        metadata_path.write_text(
+            '{"parts":{"front hair":{},"topwear":{}}}',
+            encoding="utf-8",
+        )
+
+        response = self.client.post(
+            f"/v1/layer-decompositions/{self.parent.id}/order-revisions",
+            data={"order": "topwear"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("include every visible layer", response.json()["detail"])
+
     def test_detail_edit_endpoint_rejects_a_misaligned_mask(self):
         mask_file = BytesIO()
         Image.new("L", (32, 64), 255).save(mask_file, format="PNG")

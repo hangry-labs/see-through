@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from typing import Iterable
@@ -58,6 +59,42 @@ def validate_edit_part(part: str) -> str:
     if normalized not in CANONICAL_PART_SET:
         raise ValueError(f"unsupported edit part: {normalized or part}")
     return normalized
+
+
+def available_layer_order(layer_directory: Path) -> list[str]:
+    """Return the semantic layers represented by a completed PSD metadata file."""
+    metadata_path = layer_directory.parent / f"{layer_directory.name}.psd.json"
+    if not metadata_path.is_file():
+        raise FileNotFoundError(f"layer metadata is missing: {metadata_path}")
+    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    parts = payload.get("parts")
+    if not isinstance(parts, dict):
+        raise ValueError("layer metadata does not contain a parts object")
+    available = [name for name in parts if name in CANONICAL_PART_SET]
+    if not available:
+        raise ValueError("layer metadata does not contain any reorderable layers")
+    return available
+
+
+def validate_layer_order(order: Iterable[str], available: Iterable[str]) -> list[str]:
+    """Validate a complete, front-to-back permutation of the available layers."""
+    requested = [part.strip() for part in order if part and part.strip()]
+    if len(requested) != len(set(requested)):
+        raise ValueError("layer order must not contain duplicates")
+    invalid = sorted(set(requested) - CANONICAL_PART_SET)
+    if invalid:
+        raise ValueError(f"unsupported layers in order: {', '.join(invalid)}")
+    expected = list(available)
+    missing = sorted(set(expected) - set(requested))
+    extra = sorted(set(requested) - set(expected))
+    if missing or extra or len(requested) != len(expected):
+        details = []
+        if missing:
+            details.append(f"missing {', '.join(missing)}")
+        if extra:
+            details.append(f"unexpected {', '.join(extra)}")
+        raise ValueError("layer order must include every visible layer exactly once" + (f": {'; '.join(details)}" if details else ""))
+    return requested
 
 
 def _premultiplied_restore(base: Image.Image, source: Image.Image, mask: Image.Image) -> Image.Image:
@@ -156,6 +193,15 @@ def prepare_depth_revision(parent_directory: Path, revised_directory: Path) -> N
         raise FileNotFoundError(f"parent layer directory is missing: {parent_directory}")
     if revised_directory.exists():
         raise FileExistsError(f"depth revision destination already exists: {revised_directory}")
+    shutil.copytree(parent_directory, revised_directory, ignore=shutil.ignore_patterns("optimized"))
+
+
+def prepare_order_revision(parent_directory: Path, revised_directory: Path) -> None:
+    """Copy an accepted raw layer set before rebuilding it with a manual stack."""
+    if not parent_directory.is_dir():
+        raise FileNotFoundError(f"parent layer directory is missing: {parent_directory}")
+    if revised_directory.exists():
+        raise FileExistsError(f"order revision destination already exists: {revised_directory}")
     shutil.copytree(parent_directory, revised_directory, ignore=shutil.ignore_patterns("optimized"))
 
 

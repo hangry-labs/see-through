@@ -5,11 +5,46 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+from psd_tools import PSDImage
 
+from utils.inference_utils import dump_parts_psd
 from utils.io_utils import load_parts
 
 
 class LoadPartsTests(unittest.TestCase):
+    def test_manual_order_draws_the_first_layer_in_front(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            front = np.full((4, 4, 4), (220, 20, 20, 255), dtype=np.uint8)
+            back = np.full((4, 4, 4), (20, 20, 220, 255), dtype=np.uint8)
+            parts = {
+                "front hair": {
+                    "tag": "front hair",
+                    "img": front,
+                    "depth": np.zeros((4, 4), dtype=np.uint8),
+                    "depth_median": 0.8,
+                },
+                "back hair": {
+                    "tag": "back hair",
+                    "img": back,
+                    "depth": np.full((4, 4), 255, dtype=np.uint8),
+                    "depth_median": 0.2,
+                },
+            }
+            psd_path = root / "manual.psd"
+
+            dump_parts_psd(
+                parts,
+                (4, 4),
+                str(psd_path),
+                layer_order=["front hair", "back hair"],
+            )
+
+            composite = PSDImage.open(psd_path).composite()
+            self.assertEqual(composite.getpixel((1, 1))[:3], (220, 20, 20))
+            metadata = json.loads((root / "manual.psd.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["layer_order"], ["front hair", "back hair"])
+
     def test_missing_layer_record_is_ignored(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

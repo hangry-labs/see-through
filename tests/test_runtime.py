@@ -171,6 +171,21 @@ class RevisionMetadataTests(unittest.TestCase):
         self.assertEqual(depth.revision_number, 1)
         self.assertEqual(edit.revision_number, 2)
 
+    def test_order_revisions_share_the_revision_number_sequence(self):
+        settings = {"seed": 1, "layer_order": ["face", "topwear"]}
+        parent = runtime.create_job(settings)
+        parent.status = "completed"
+        with runtime._state_lock:
+            runtime._active_job_id = None
+        order = runtime.create_job(
+            settings,
+            kind="order",
+            parent_job_id=parent.id,
+            root_job_id=parent.id,
+        )
+
+        self.assertEqual(order.revision_number, 1)
+
     def test_depth_revision_number_survives_disk_restore(self):
         settings = {
             "seed": 1,

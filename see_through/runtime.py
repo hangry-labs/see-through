@@ -109,7 +109,7 @@ def create_job(
                     default=0,
                 )
                 + 1
-                if kind in {"revision", "edit", "depth"}
+                if kind in {"revision", "edit", "depth", "order"}
                 else 0
             )
         job = Job(
@@ -229,7 +229,9 @@ def pipeline_runtime(job: Job | None = None) -> dict[str, Any]:
     layerdiff_state = "on-demand"
     depth_state = "on-demand"
     if stage in {"queued", "starting"}:
-        if job and job.kind in {"edit", "depth"}:
+        if job and job.kind == "order":
+            pass
+        elif job and job.kind in {"edit", "depth"}:
             depth_state = "loading" if job.kind == "depth" else "on-demand"
         else:
             layerdiff_state = "loading"
@@ -241,7 +243,7 @@ def pipeline_runtime(job: Job | None = None) -> dict[str, Any]:
         layerdiff_state = "on-demand" if job and job.kind in {"edit", "depth"} else "resident"
         depth_state = "active" if stage == "depth-estimation" else "pending"
     elif stage == "psd-assembly":
-        layerdiff_state = "on-demand" if job and job.kind in {"edit", "depth"} else "resident"
+        layerdiff_state = "on-demand" if job and job.kind in {"edit", "depth", "order"} else "resident"
         depth_state = "resident" if job and job.settings.get("depth_recalculated") else "on-demand"
 
     return {
@@ -324,6 +326,7 @@ def _set_stage(job: Job, line: str) -> None:
         "building revised psd" in lowered
         or "building edited psd" in lowered
         or "building depth revision psd" in lowered
+        or "building manually ordered psd" in lowered
         or "psd saved" in lowered
     ):
         job.stage = "psd-assembly"
@@ -376,7 +379,7 @@ def run_job(job_id: str) -> None:
 
     settings = job.settings
     command = [sys.executable, "-u"]
-    if job.kind in {"revision", "edit", "depth"}:
+    if job.kind in {"revision", "edit", "depth", "order"}:
         if not job.parent_job_id:
             job.status = "failed"
             job.stage = "failed"
@@ -387,7 +390,32 @@ def run_job(job_id: str) -> None:
                 if _active_job_id == job.id:
                     _active_job_id = None
             return
-        if job.kind == "edit":
+        if job.kind == "order":
+            layer_order = settings.get("layer_order")
+            if not isinstance(layer_order, list) or not layer_order:
+                job.status = "failed"
+                job.stage = "failed"
+                job.error = "order revision is missing its layer order"
+                job.completed_at = utc_now()
+                persist_job(job)
+                with _state_lock:
+                    if _active_job_id == job.id:
+                        _active_job_id = None
+                return
+            command.extend(
+                [
+                    str(APP_ROOT / "inference" / "scripts" / "inference_order_revision.py"),
+                    "--parent_dir",
+                    str(output_root(job.parent_job_id) / "input"),
+                    "--srcp",
+                    str(input_path(job_id)),
+                    "--save_dir",
+                    str(output_root(job_id)),
+                ]
+            )
+            for part in layer_order:
+                command.extend(["--layer_order", part])
+        elif job.kind == "edit":
             if len(job.replaced_parts) != 1:
                 job.status = "failed"
                 job.stage = "failed"
@@ -451,6 +479,9 @@ def run_job(job_id: str) -> None:
             )
             for part in job.replaced_parts:
                 command.extend(["--replace_tag", part])
+        if job.kind in {"revision", "edit"}:
+            for part in settings.get("layer_order", []):
+                command.extend(["--layer_order", part])
     else:
         command.extend(
             [
@@ -487,6 +518,7 @@ def run_job(job_id: str) -> None:
         "revision": "Starting See-through revision",
         "edit": "Starting See-through detail edit",
         "depth": "Starting See-through depth revision",
+        "order": "Starting See-through order revision",
     }
     job.logs.append(start_labels.get(job.kind, "Starting See-through job"))
     job.logs.append("Command settings: " + ", ".join(f"{key}={value}" for key, value in settings.items()))
@@ -649,7 +681,7 @@ def load_jobs_from_disk() -> None:
                 job
                 for job in _jobs.values()
                 if (job.root_job_id or job.id) == root_id
-                and job.kind in {"revision", "edit", "depth"}
+                and job.kind in {"revision", "edit", "depth", "order"}
             ),
             key=lambda job: (job.created_at, job.id),
         )

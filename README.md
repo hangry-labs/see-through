@@ -1,6 +1,6 @@
 # See-through
 
-Local, private anime-character layer decomposition with a browser UI, HTTP API, layered PSD export, interactive 2.5D preview, selective regeneration, and manual source-detail recovery.
+Local, private anime-character layer decomposition with a browser UI, HTTP API, layered PSD export, interactive 2.5D preview, manual layer ordering, selective regeneration, and source-detail recovery.
 
 [![Docker Hub](https://img.shields.io/badge/Docker%20Hub-hangrylabs%2Fsee--through-2496ed?logo=docker&logoColor=white)](https://hub.docker.com/r/hangrylabs/see-through)
 [![GitHub](https://img.shields.io/badge/GitHub-hangry--labs%2Fsee--through-181717?logo=github)](https://github.com/hangry-labs/see-through)
@@ -83,6 +83,12 @@ On any accepted result, **Recalculate depth** creates an isolated candidate with
 
 Higher depth resolutions can preserve finer depth boundaries but require more GPU memory and time. A new seed may change the estimated ordering because Marigold's inference is seeded. While an edit, regeneration, or depth recalculation is active, the affected layer cards are dimmed and locked until the candidate is ready or the job stops.
 
+### Manually reorder layers
+
+The result grid is also the layer stack. Visible cards are numbered from **Front** to **Back** in left-to-right, top-to-bottom order. Drag a card to a new position, or use its left and right arrow buttons for one-step movement. The 2.5D preview updates immediately so overlaps can be checked before saving.
+
+**Save order revision** copies the accepted layer assets and rebuilds the PSD on the CPU without running LayerDiff3D or Marigold. The result is a normal reviewable candidate. **Reset to automatic** restores the current Marigold and semantic-safeguard order before saving. A kept manual order is retained by later detail edits and selective layer regeneration; an explicit depth recalculation intentionally replaces it with a new automatic order.
+
 Useful commands:
 
 ```bash
@@ -133,6 +139,7 @@ The UI and API share port `8000`.
 - Regenerate selected parts: `POST /v1/layer-decompositions/{job_id}/revisions`
 - Apply a source-detail mask to one part: `POST /v1/layer-decompositions/{job_id}/edits`
 - Recalculate all layer depths: `POST /v1/layer-decompositions/{job_id}/depth-revisions`
+- Apply a complete front-to-back layer stack: `POST /v1/layer-decompositions/{job_id}/order-revisions`
 - Read its revision timeline: `GET /v1/layer-decompositions/{job_id}/revisions`
 - Keep a completed candidate: `POST /v1/layer-decompositions/{job_id}/accept`
 - Download its PSD: `GET /v1/layer-decompositions/{job_id}/download`
@@ -148,6 +155,8 @@ curl -X POST http://localhost:8000/v1/layer-decompositions/JOB_ID/edits \
 The mask must have the same full-canvas dimensions as the selected layer. Black keeps generated pixels, white restores original pixels, and intermediate values create a soft blend. A successful request returns `202 Accepted` with a normal queued job payload. Poll its job URL, review the completed candidate, and use the existing accept endpoint to keep it.
 
 The depth-revision endpoint accepts optional `seed` and `depth_resolution` multipart fields. Supported depth resolutions are 512, 640, 768, 896, 1024, and 1280 px. Omitting the seed selects a new random value; omitting the resolution inherits it from the parent result.
+
+The order-revision endpoint accepts one multipart `order` field for every visible semantic layer, listed front-to-back. Every layer represented by the parent PSD metadata must appear exactly once. It returns a queued CPU-only candidate that can be polled and accepted through the normal revision endpoints.
 
 Completed part records expose `url`, `base_url`, `edited`, and `edit_mask_url`. `base_url` is the untouched model result used by **Use generated**; `edit_mask_url` allows a kept edit to be reopened and adjusted.
 
@@ -197,6 +206,7 @@ task validate-release
 - Added immutable revision history and selective regeneration of incorrect or missing semantic layers while preserving accepted parent results.
 - Added a full-resolution source-detail editor with restore/erase painting, soft brush falloff, brush-footprint outlines, undo/redo, pointer-centered zoom up to 1200%, configurable backdrops, and independent source, selected-layer, and composition opacity.
 - Added retained editable masks, premultiplied-alpha blending, automatic Marigold recalculation when restored pixels expand a layer, manual seeded depth revisions from 512 to 1280 px, and clear per-layer processing states.
+- Added numbered drag-and-drop layer ordering with one-step controls, live 2.5D stack updates, automatic-order reset, and CPU-only immutable PSD order revisions.
 - Added automated source checks plus full and tiny Docker publication workflows for rolling and immutable release tags.
 - Preserved local workspace privacy, upstream authorship, research citations, model attribution, and the Apache-2.0 license.
 

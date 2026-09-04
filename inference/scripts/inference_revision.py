@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--parent_dir", required=True)
     parser.add_argument("--save_dir", required=True)
     parser.add_argument("--replace_tag", action="append", required=True)
+    parser.add_argument("--layer_order", action="append")
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--repo_id_layerdiff", required=True)
     parser.add_argument("--repo_id_depth", required=True)
@@ -81,7 +82,13 @@ def main() -> None:
         )
 
         print("building revised PSD...")
-        further_extr(str(hybrid_directory), rotate=False, save_to_psd=True, tblr_split=False)
+        further_extr(
+            str(hybrid_directory),
+            rotate=False,
+            save_to_psd=True,
+            tblr_split=False,
+            layer_order=args.layer_order,
+        )
     finally:
         shutil.rmtree(candidate_root, ignore_errors=True)
 

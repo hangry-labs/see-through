@@ -193,6 +193,21 @@
               </div>
             </section>
 
+            <section id="layer-order-panel" class="layer-order-panel" hidden>
+              <div class="layer-order-heading">
+                <div>
+                  <p class="eyebrow">LAYER STACK</p>
+                  <h3>Front → Back</h3>
+                  <p>Drag visible cards left-to-right, top-to-bottom. The first card is painted above every card after it.</p>
+                </div>
+                <div class="layer-order-actions">
+                  <button id="reset-layer-order" class="text-button" type="button" disabled><i class="icon-rotate-ccw"></i> Reset to automatic</button>
+                  <button id="save-layer-order" class="download-button" type="button" disabled><i class="icon-save"></i> Save order revision</button>
+                </div>
+              </div>
+              <div id="layer-order-status" class="layer-order-status">Automatic Marigold order. Drag a visible layer to override it.</div>
+            </section>
+
             <div id="asset-gallery" class="asset-gallery"></div>
 
             <section id="revision-history" class="revision-history" hidden>
@@ -215,6 +230,7 @@
         <code><b>POST</b> /v1/layer-decompositions/{job_id}/revisions</code>
         <code><b>POST</b> /v1/layer-decompositions/{job_id}/edits</code>
         <code><b>POST</b> /v1/layer-decompositions/{job_id}/depth-revisions</code>
+        <code><b>POST</b> /v1/layer-decompositions/{job_id}/order-revisions</code>
         <code><b>GET</b> /v1/layer-decompositions/{job_id}/revisions</code>
         <code><b>POST</b> /v1/layer-decompositions/{job_id}/accept</code>
         <code><b>GET</b> /v1/layer-decompositions/{job_id}/download</code>
