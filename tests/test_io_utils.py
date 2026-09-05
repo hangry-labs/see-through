@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import tempfile
 import unittest
@@ -5,13 +6,19 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
-from psd_tools import PSDImage
 
-from utils.inference_utils import dump_parts_psd
 from utils.io_utils import load_parts
 
 
+HAS_PSD_TOOLS = importlib.util.find_spec("psd_tools") is not None
+if HAS_PSD_TOOLS:
+    from psd_tools import PSDImage
+
+    from utils.inference_utils import dump_parts_psd
+
+
 class LoadPartsTests(unittest.TestCase):
+    @unittest.skipUnless(HAS_PSD_TOOLS, "PSD integration requires the full runtime dependencies")
     def test_manual_order_draws_the_first_layer_in_front(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
