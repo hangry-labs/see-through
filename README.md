@@ -11,7 +11,7 @@ This distribution packages the [original See-through project](https://github.com
 ## Requirements
 
 - An NVIDIA GPU; 16 GB VRAM is recommended
-- Current NVIDIA drivers
+- NVIDIA drivers supporting CUDA 13.0 for development builds (the published v0.1.0 image uses CUDA 12.8)
 - Docker with NVIDIA GPU access
 
 On Windows, install [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/) and use its WSL 2 backend. Follow Docker's [GPU support guide](https://docs.docker.com/desktop/features/gpu/) to verify the GPU is available.

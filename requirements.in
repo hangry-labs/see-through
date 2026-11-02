@@ -1,25 +1,30 @@
---extra-index-url https://download.pytorch.org/whl/cu128
+--extra-index-url https://download.pytorch.org/whl/cu130
 
-torch==2.8.0+cu128
-torchvision==0.23.0+cu128
-torchaudio==2.8.0+cu128
+torch==2.13.0+cu130
+torchvision==0.28.0+cu130
 
-accelerate==1.13.0
-diffusers==0.37.0
+accelerate==1.15.0
+diffusers==0.38.0
 einops==0.8.2
 fastapi==0.136.3
 huggingface-hub==1.7.2
 matplotlib==3.9.4
 numpy==2.2.6
 opencv-python-headless==4.13.0.92
-pillow==12.1.1
-psd-tools[composite]==1.14.2
+pillow==13.0.0
+psd-tools[composite]==1.17.4
 pycocotools==2.0.11
 python-multipart==0.0.32
 pyyaml==6.0.3
-safetensors==0.7.0
+safetensors==0.8.0
 scikit-learn==1.7.2
 tokenizers==0.22.2
 tqdm==4.67.3
-transformers==5.0.0
+transformers==5.10.4
 uvicorn==0.51.0
+
+# Security floors for transitive runtime dependencies.
+certifi>=2026.10.18
+filelock>=4.2.1
+setuptools>=84.1.0
+urllib3>=2.8.0

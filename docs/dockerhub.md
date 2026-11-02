@@ -43,7 +43,7 @@ When generation finishes, you can inspect the generated pieces and download the 
 You need:
 
 1. A computer with an NVIDIA graphics card
-2. Current NVIDIA drivers
+2. Current NVIDIA drivers (development builds require CUDA 13.0 support; v0.1.0 uses CUDA 12.8)
 3. Docker with NVIDIA GPU support
 4. Approximately 16 GB of GPU memory for the recommended experience
 

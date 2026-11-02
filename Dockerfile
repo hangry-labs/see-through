@@ -34,7 +34,7 @@ COPY requirements.txt /app/
 
 RUN python -m pip install --upgrade pip setuptools wheel \
     && python -m pip install \
-        --extra-index-url https://download.pytorch.org/whl/cu128 \
+        --extra-index-url https://download.pytorch.org/whl/cu130 \
         -r /app/requirements.txt
 
 COPY common /app/common
@@ -42,7 +42,7 @@ COPY inference /app/inference
 COPY see_through /app/see_through
 COPY LICENSE README.md VERSION /app/
 
-RUN python -m pip install -e /app/common --no-deps \
+RUN python -m pip install -e /app/common --no-deps --no-build-isolation \
     && mkdir -p /app/workspace /app/.cache/huggingface
 
 EXPOSE 8000

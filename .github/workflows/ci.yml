@@ -46,7 +46,7 @@ jobs:
           fastapi==0.136.3
           httpx==0.28.1
           numpy==2.2.6
-          Pillow==12.1.1
+          Pillow==13.0.0
           opencv-python-headless==4.13.0.92
           pycocotools==2.0.11
           python-multipart==0.0.32
