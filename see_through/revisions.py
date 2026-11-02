@@ -58,7 +58,8 @@ def validate_edit_part(part: str) -> str:
     normalized = part.strip()
     if normalized not in CANONICAL_PART_SET:
         raise ValueError(f"unsupported edit part: {normalized or part}")
-    return normalized
+    # Return a trusted canonical name rather than the request's string.
+    return next(name for name in CANONICAL_PARTS if name == normalized)
 
 
 def available_layer_order(layer_directory: Path) -> list[str]:

@@ -445,10 +445,10 @@ def download_psd(job_id: str) -> FileResponse:
         raise HTTPException(404, "job not found")
     if job.status != "completed":
         raise HTTPException(409, f"job is {job.status}")
-    path = output_root(job_id) / "input.psd"
+    path = output_root(job.id) / "input.psd"
     if not path.is_file():
         raise HTTPException(404, "PSD output is missing")
-    return FileResponse(path, media_type="image/vnd.adobe.photoshop", filename=f"see-through-{job_id[:8]}.psd")
+    return FileResponse(path, media_type="image/vnd.adobe.photoshop", filename=f"see-through-{job.id[:8]}.psd")
 
 
 @app.get("/v1/layer-decompositions/{job_id}/assets/{asset_path:path}")
@@ -456,7 +456,7 @@ def job_asset(job_id: str, asset_path: str) -> FileResponse:
     job = get_job(job_id)
     if job is None:
         raise HTTPException(404, "job not found")
-    root = job_root(job_id).resolve()
+    root = job_root(job.id).resolve()
     path = (root / asset_path).resolve()
     if root not in path.parents or not path.is_file():
         raise HTTPException(404, "asset not found")

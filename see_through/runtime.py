@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import logging
 import signal
 import subprocess
 import sys
@@ -35,6 +36,7 @@ MARIGOLD_BASE_MODEL_ID = os.getenv(
 )
 SAM_BODY_MODEL_ID = os.getenv("SEE_THROUGH_SAM_BODY_MODEL_ID", "24yearsold/l2d_sam_iter2")
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+logger = logging.getLogger(__name__)
 
 
 def utc_now() -> str:
@@ -608,8 +610,13 @@ def gpu_runtime() -> dict[str, Any]:
             "cuda_version": torch.version.cuda,
             "devices": devices,
         }
-    except Exception as exc:
-        return {"available": False, "error": str(exc), "devices": []}
+    except Exception:
+        logger.exception("GPU runtime inspection failed")
+        return {
+            "available": False,
+            "error": "GPU runtime inspection failed. Check the service logs for details.",
+            "devices": [],
+        }
 
 
 def load_jobs_from_disk() -> None:
